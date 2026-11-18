@@ -36,6 +36,7 @@ jobs:
       ui: ${{ github.event_name != 'pull_request' || steps.f.outputs.ui == 'true' }}
       app: ${{ github.event_name != 'pull_request' || steps.f.outputs.app == 'true' }}
       workflows: ${{ github.event_name != 'pull_request' || steps.f.outputs.workflows == 'true' }}
+      contract: ${{ github.event_name == 'pull_request' && steps.f.outputs.contract == 'true' }}
       native: ${{ steps.f.outputs.native == 'true' || steps.labels.outputs.native == 'true' }}
       labels: ${{ steps.labels.outputs.names }}
     steps:
@@ -50,6 +51,7 @@ jobs:
             app: ['uploader/app/src-tauri/**', 'uploader/Cargo.*', 'uploader/core/**', '.github/workflows/ci.yml']
             native: ['uploader/app/**', 'uploader/core/**', 'uploader/Cargo.*', '.github/workflows/uploader-app-build.yml']
             workflows: ['.github/**', 'scripts/ci/**', 'tests/workflows_check.py', 'tests/ready_test.py']
+            contract: ['contract/**', 'tests/golden-add-only.sh']
       # Read now, not from the event: a re-run keeps the labels the PR had when it was opened or pushed, so a label
       # added afterwards (native-build, golden-break) takes effect on "Re-run failed jobs".
       - name: Read the PR's labels
@@ -137,6 +139,22 @@ jobs:
         with: { workspaces: "uploader -> target", key: app }
       - run: cargo test -p guild-uploader-app --locked
 
+  # The wire format's golden files are add-only (contract/SPEC.md 5.2): changing, renaming or deleting one fails unless the
+  # PR has the `golden-break` label. The label comes from `changes`, which reads it when it runs.
+  contract:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Golden files are add-only (contract/SPEC.md 5.2)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GOLDEN_BREAK: ${{ contains(format(',{0},', needs.changes.outputs.labels), ',golden-break,') && '1' || '' }}
+        run: sh tests/golden-add-only.sh "$BASE"
+
   native:
     needs: changes
     if: needs.changes.outputs.native == 'true'
@@ -146,7 +164,7 @@ jobs:
   # one table (also in the step summary).
   ci-ok:
     if: ${{ !cancelled() }}   # not always(): a run cancelled by a newer push or a base change must not report a red ci-ok
-    needs: [changes, branding, workflows, addon, core, ui, app, native]
+    needs: [changes, branding, workflows, addon, core, ui, app, contract, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
