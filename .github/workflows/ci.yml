@@ -1,33 +1,47 @@
 name: ci
-# PR checks. Each area runs only when its files change; ci-ok is the single required check
-# and counts skipped jobs as passed. See docs/workflow/05-verification.md section 3.
+# PR checks, the org's way (ci repo, AGENTS.md and docs/PLAN.md §5 and §7.1; docs/workflow/05-verification.md §3 here).
+# Each area runs only when its files change. `ci-ok` is THE check: `pr-wait`, `pr-automerge`, the `ready` job below and the
+# owner's `main` ruleset read only it, and it counts skipped jobs as passed. Agents: read the ci-ok job log, then run
+# `../ci/tools/pr-wait <repo> <pr>` in the background after every push.
+#
+# Where it runs: GitHub-hosted runners, on purpose. This repo is PUBLIC, and GitHub doesn't meter hosted minutes for public
+# repos, so the "Actions minutes are nearly used up" reason for the org's self-hosted runners doesn't apply here. Two more
+# reasons keep it off them: the org's runner group serves only auction-forever, bloodfang-site and ci (a job asking for
+# [self-hosted, Linux, X64] here would sit queued until hookd raises "runner down?"), and a public repo's fork PRs must never
+# reach the owner's machines. tests/workflows_check.py enforces it. To move later, see 05-verification.md §3.
+# Native Windows and macOS builds can't run on the Linux runners anyway: `native` runs only when uploader paths change or the
+# PR has the `native-build` label (and on tags, in uploader-app-release.yml).
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults:
+  run:
+    shell: bash   # bash -eo pipefail
 jobs:
   changes:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: read   # paths-filter lists the PR's files, and the label step reads the PR's labels
     outputs:
       addon: ${{ github.event_name != 'pull_request' || steps.f.outputs.addon == 'true' }}
       core: ${{ github.event_name != 'pull_request' || steps.f.outputs.core == 'true' }}
       ui: ${{ github.event_name != 'pull_request' || steps.f.outputs.ui == 'true' }}
       app: ${{ github.event_name != 'pull_request' || steps.f.outputs.app == 'true' }}
-      native: ${{ steps.f.outputs.native == 'true' || contains(github.event.pull_request.labels.*.name, 'native-build') }}
+      workflows: ${{ github.event_name != 'pull_request' || steps.f.outputs.workflows == 'true' }}
+      native: ${{ steps.f.outputs.native == 'true' || steps.labels.outputs.native == 'true' }}
+      labels: ${{ steps.labels.outputs.names }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: f
-        if: github.event_name == 'pull_request'
         with:
           filters: |
             addon: ['addon/**', 'tests/**', 'contract/**', 'scripts/build-addon.sh', '.github/workflows/addon-checks.yml', '.github/workflows/ci.yml']
@@ -35,15 +49,45 @@ jobs:
             ui: ['uploader/app/ui/**', 'contract/golden/uploader/**', '.github/workflows/ci.yml']
             app: ['uploader/app/src-tauri/**', 'uploader/Cargo.*', 'uploader/core/**', '.github/workflows/ci.yml']
             native: ['uploader/app/**', 'uploader/core/**', 'uploader/Cargo.*', '.github/workflows/uploader-app-build.yml']
+            workflows: ['.github/**', 'scripts/ci/**', 'tests/workflows_check.py', 'tests/ready_test.py']
+      # Read now, not from the event: a re-run keeps the labels the PR had when it was opened or pushed, so a label
+      # added afterwards (native-build, golden-break) takes effect on "Re-run failed jobs".
+      - name: Read the PR's labels
+        id: labels
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          names=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '[.labels[].name] | join(",")')
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+          case ",$names," in *,native-build,*) echo "native=true" >> "$GITHUB_OUTPUT" ;; esac
 
   branding:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       # Fork PRs get no secrets, so the script skips; it runs again on push to main.
       - name: No branding
         env: { BRANDING_WORDS: "${{ secrets.BRANDING_WORDS }}" }
         run: scripts/check-no-branding.sh
+
+  # The workflows themselves: timeouts, runners, triggers, and the ready step's logic (tests/workflows_check.py,
+  # tests/ready_test.py). The ci repo's check-workflow-timeouts can't be read from here (private repo), so this repo
+  # carries the same rules.
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install -q pyyaml==6.0.2
+      - run: python tests/workflows_check.py
+      - run: python tests/ready_test.py
 
   addon:
     needs: changes
@@ -54,6 +98,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults: { run: { working-directory: uploader } }
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +111,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -77,6 +123,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults: { run: { working-directory: uploader } }
     steps:
       - uses: actions/checkout@v4
@@ -95,22 +142,52 @@ jobs:
     if: needs.changes.outputs.native == 'true'
     uses: ./.github/workflows/uploader-app-build.yml
 
+  # The verdict: passes when every job above succeeded or was skipped on purpose (path filter), else fails, and prints
+  # one table (also in the step summary).
   ci-ok:
     if: always()
-    needs: [changes, branding, addon, core, ui, app, native]
+    needs: [changes, branding, workflows, addon, core, ui, app, native]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: All checks passed or were skipped
+      - name: Every job passed or was skipped on purpose
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
           NEEDS: ${{ toJSON(needs) }}
         run: |
-          echo "results: $RESULTS"
-          for r in $RESULTS; do
-            case "$r" in success|skipped) ;; *) echo "::error::a required job ended with '$r'"; exit 1 ;; esac
-          done
-          {
-            echo "### ci"
-            echo "| job | result |"; echo "|---|---|"
-            python3 -c 'import json,os; [print("| %s | %s |" % (k, v["result"])) for k, v in json.loads(os.environ["NEEDS"]).items()]'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          table = "### ci\n| job | result |\n|---|---|\n" + "".join(f"| {k} | {v['result']} |\n" for k, v in needs.items())
+          print(table)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(table)
+          bad = {k: v["result"] for k, v in needs.items() if v["result"] not in ("success", "skipped")}
+          for k, r in bad.items():
+              print(f"::error title=ci-ok::job {k} ended {r}")
+          sys.exit(1 if bad else 0)
+          PY
+
+  # The ready step (ci docs/PLAN.md §7.1, scripts/ci/ready.py): once the PR's head commit has its ci-ok verdict, label
+  # it ready-for-review or ci-failed. ready.yml does the same when a draft is marked ready. It runs after ci-ok, so it
+  # can't change the verdict, and an API hiccup only warns (continue-on-error covers the rest). Same-repo PRs only: a
+  # fork's token can't write labels.
+  ready:
+    needs: ci-ok
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read   # the PR for this commit
+      issues: write         # labels
+      checks: read          # the ci-ok check run
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha }}", persist-credentials: false }
+      - name: Label the PR ready-for-review or ci-failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CI_OK_RESULT: ${{ needs.ci-ok.result }}
+        run: python3 scripts/ci/ready.py "$SHA"

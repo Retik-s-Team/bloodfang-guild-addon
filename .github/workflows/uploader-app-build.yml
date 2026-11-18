@@ -20,6 +20,7 @@ jobs:
           - { os: windows-2022, platform: windows, bundles: nsis, target: x86_64-pc-windows-msvc }
           - { os: macos-15, platform: macos, bundles: dmg, target: universal-apple-darwin }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60   # macOS universal takes about 23 minutes
     defaults: { run: { shell: bash } }
     steps:
       - uses: actions/checkout@v4
