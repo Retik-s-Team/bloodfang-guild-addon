@@ -10,6 +10,8 @@ and the ones that follow from where it runs. Each rule prints one line per probl
   R3 only ci.yml and ready.yml run on pull requests, and no workflow uses pull_request_target: the release workflows
      keep write, id-token and attestation permissions, so they must never run PR code.
   R4 ci-ok needs every other ci.yml job except `ready`, and `ready` needs ci-ok and skips fork PRs.
+  R5 the ready jobs can write labels on a PR: `pull-requests: write` and `issues: write`. (With `issues: write` alone the
+     labels API answers 403 on a pull request; seen on this repo's first run, 2026-11-18.)
 """
 import pathlib
 import sys
@@ -43,6 +45,11 @@ def runners(job):
         else:
             out.append(n)
     return out
+
+
+def label_permission_problems(name, job):
+    perms = job.get("permissions") or {}
+    return [f"R5 {name} > ready: `{k}: write` is missing from its permissions" for k in ("pull-requests", "issues") if perms.get(k) != "write"]
 
 
 def check(workflows_dir=WORKFLOWS):
@@ -84,9 +91,12 @@ def check(workflows_dir=WORKFLOWS):
         r = jobs.get("ready", {})
         if r.get("needs") != "ci-ok" or FORK_GUARD not in str(r.get("if", "")):
             problems.append("R4 ci.yml: `ready` must need ci-ok and skip fork PRs")
+        problems += label_permission_problems("ci.yml", r)
     ry = docs.get("ready.yml")
     if ry and FORK_GUARD not in str(ry.get("jobs", {}).get("ready", {}).get("if", "")):
         problems.append("R4 ready.yml: its job must skip fork PRs")
+    if ry:
+        problems += label_permission_problems("ready.yml", ry.get("jobs", {}).get("ready", {}))
     return problems
 
 

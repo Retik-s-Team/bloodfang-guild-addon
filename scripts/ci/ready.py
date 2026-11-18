@@ -9,7 +9,7 @@ marked ready (then the verdict is read from the ci-ok check run). Uses `gh api` 
   - Green (ci-ok succeeded): adds ready-for-review, removes ci-failed and ci-running.
     Red (failed, cancelled, timed out): adds ci-failed, removes ready-for-review. Anything else: no label change.
   - A GitHub API error only warns. This step must never turn CI red: exit 0, and exit 2 only for a bad argument.
-The same behaviour as bloodfang-site's scripts/ci/ready.mjs (ci docs/PLAN.md 7.1), without the preview half: this repo
+The same behaviour as the site repo's scripts/ci/ready.mjs (ci docs/PLAN.md 7.1), without the preview half: this repo
 has no previews. Labels set with GITHUB_TOKEN start no workflows, so this can't loop.
 """
 import json

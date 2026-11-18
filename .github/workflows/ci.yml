@@ -1,14 +1,14 @@
 name: ci
-# PR checks, the org's way (ci repo, AGENTS.md and docs/PLAN.md §5 and §7.1; docs/workflow/05-verification.md §3 here).
-# Each area runs only when its files change. `ci-ok` is THE check: `pr-wait`, `pr-automerge`, the `ready` job below and the
-# owner's `main` ruleset read only it, and it counts skipped jobs as passed. Agents: read the ci-ok job log, then run
+# PR checks, the org's way (the shared ci repo's AGENTS.md and docs/PLAN.md §5 and §7.1; docs/workflow/05-verification.md §3
+# here). Each area runs only when its files change. `ci-ok` is THE check: pr-wait, pr-automerge, the `ready` job below and
+# the owner's `main` ruleset read only it, and it counts skipped jobs as passed. Agents: read the ci-ok job log, then run
 # `../ci/tools/pr-wait <repo> <pr>` in the background after every push.
 #
 # Where it runs: GitHub-hosted runners, on purpose. This repo is PUBLIC, and GitHub doesn't meter hosted minutes for public
 # repos, so the "Actions minutes are nearly used up" reason for the org's self-hosted runners doesn't apply here. Two more
-# reasons keep it off them: the org's runner group serves only auction-forever, bloodfang-site and ci (a job asking for
-# [self-hosted, Linux, X64] here would sit queued until hookd raises "runner down?"), and a public repo's fork PRs must never
-# reach the owner's machines. tests/workflows_check.py enforces it. To move later, see 05-verification.md §3.
+# reasons keep it off them: the org's runner group serves only the org's private repos (a job asking for
+# [self-hosted, Linux, X64] here would sit queued until the org's alerting reports a runner down), and a public repo's fork
+# PRs must never reach the owner's machines. tests/workflows_check.py enforces it. To move later, see 05-verification.md §3.
 # Native Windows and macOS builds can't run on the Linux runners anyway: `native` runs only when uploader paths change or the
 # PR has the `native-build` label (and on tags, in uploader-app-release.yml).
 on:
@@ -145,7 +145,7 @@ jobs:
   # The verdict: passes when every job above succeeded or was skipped on purpose (path filter), else fails, and prints
   # one table (also in the step summary).
   ci-ok:
-    if: always()
+    if: ${{ !cancelled() }}   # not always(): a run cancelled by a newer push or a base change must not report a red ci-ok
     needs: [changes, branding, workflows, addon, core, ui, app, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -173,13 +173,13 @@ jobs:
   # fork's token can't write labels.
   ready:
     needs: ci-ok
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     continue-on-error: true
     permissions:
       contents: read
-      pull-requests: read   # the PR for this commit
+      pull-requests: write  # labels on a PR: the labels API wants this, issues: write alone gets a 403 on a pull request
       issues: write         # labels
       checks: read          # the ci-ok check run
     steps:
