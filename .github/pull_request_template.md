@@ -1,22 +1,22 @@
-## Task
-<!-- plan id from docs/workflow/06-plan.md (e.g. A2) and a one-paragraph summary -->
+**Preview:** n/a: this repo has no previews; the owner merges every PR <!-- Keep this line as it is. A first line of `**Preview:** none` would let the shared pr-automerge merge the PR by itself (AGENTS.md rule 12). -->
 
-## Area
-- [ ] addon (Lua)  - [ ] uploader core  - [ ] uploader UI  - [ ] uploader app/native  - [ ] CI/release  - [ ] contract
+## Summary
+<!-- Two or three plain sentences: what changed and why it matters. No file names, no jargon. -->
 
-## Requirements → tests
-| # | Requirement | Test (file › name) | Result |
-|---|---|---|---|
-| R1 | | | |
+## Check it yourself
+<!-- Most important first. Verify every item yourself before asking for review. -->
+- [ ] <what to do> → <what you should see> (<direct link: the ci-ok run for the head SHA, a file>)
 
-## Wire format
-- Export types/versions changed: none / list (new `contract/golden/...` files)
-- Endpoints/envelopes changed: none / list
-- Site PR: none / <link>
+<details><summary>Agent notes</summary>
 
-## Checks
-- CI run for head SHA: <link>
-- wowless scenarios: pass / n/a
-- ARIA snapshot changes: none / list + why
-- Native checklist: n/a / Windows __ macOS __ (release PRs)
-- In-game checklist: n/a / client __ (release PRs)
+**Task:** <plan id from docs/workflow/06-plan.md, e.g. A2> · **Branch:** <head> → <base>
+**Area:** addon (Lua) · uploader core · uploader UI · uploader app/native · CI/release · contract
+**Changed:** <area>: <one line> (one bullet per area)
+**Requirements → tests:** <none | R1: <requirement in the owner's words> → `<test file › name>` ✅, one per line>
+**Verified:** ci-ok [run](<link for the head SHA>) · local: <what, if anything>
+**Wire format:** <unchanged | new versions and golden files · site PR link>
+**Not verified:** <in game | natively | none> (say it plainly; AGENTS.md rule 7)
+**Exceptions:** <none | loosened assertions (with the owner's OK), ARIA snapshot changes, each with its reason>
+**Rollback:** <n/a | how>
+**Follow-ups:** <none | list, including checks that only work after merge>
+</details>
