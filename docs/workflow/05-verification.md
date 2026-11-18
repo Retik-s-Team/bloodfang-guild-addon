@@ -28,26 +28,41 @@ Every command prints failures plus one summary line.
 9. **Manual (AD13):** `docs/testing/in-game-checklist.md` and `docs/testing/native-checklist.md`, short numbered steps with expected results, run by the owner before a release; the release PR records client or OS version and result.
 
 ## 3. CI
-`ci.yml` on `pull_request` and push to `main`:
+`ci.yml` on `pull_request` and push to `main`, in the org's shape (`ci` repo, `AGENTS.md` and `docs/PLAN.md` §5, §7.1): `changes` (path filter) → area jobs → **`ci-ok`** → `ready`.
 
 | Job | Runs when these change | Runner |
 |---|---|---|
 | `branding` | anything (secret-dependent; skips on fork PRs, runs on `main`) | ubuntu |
+| `workflows` | `.github/**`, `scripts/ci/**`, `tests/workflows_check.py`, `tests/ready_test.py` | ubuntu: the workflow rules (timeouts, runners, triggers, `ci-ok` wiring) and the ready step's tests |
 | `addon` | `addon/**`, `tests/**`, `contract/**`, `scripts/build-addon.sh` | ubuntu: luacheck, api-check, run.py, package-check, golden add-only rule |
 | `wowless` | same as `addon` | ubuntu, Docker; wowless image built from a pinned commit and cached |
 | `core` | `uploader/core/**`, `uploader/Cargo.*`, `contract/**` | ubuntu: fmt, clippy, test (incl. mock-server tests) |
 | `ui` | `uploader/app/ui/**`, `contract/golden/uploader/**` | ubuntu: node --test, Playwright |
 | `app` | `uploader/app/src-tauri/**`, `uploader/Cargo.*`, `uploader/core/**` | ubuntu with Tauri Linux deps: clippy, test |
 | `native` | `uploader/app/**`, `uploader/core/**`, `uploader/Cargo.*`, or label `native-build` | reusable workflow: windows-2022 + macos-15, build, `launch-smoke.ps1`, `--smoke` JSON, dmg check, no signing |
-| `ci-ok` | always | needs all; skipped counts as success; **the required check** |
+| `ci-ok` | always | needs all; skipped counts as success; **the required check**. `pr-wait`, `pr-automerge` and `ready` read only it |
+| `ready` | PRs from this repo, after `ci-ok` | adds `ready-for-review` (green) or `ci-failed` (red) to a non-draft PR and removes the opposite label; `ready.yml` does the same when a draft is marked ready |
 
-- PR jobs: `permissions: contents: read`, no secrets needed. Pinned actions, Rust 1.90.0, `lupa==2.4`, luacheck version.
+- PR jobs: `permissions: contents: read` (`ready` also `issues: write`), no secrets needed. Pinned actions, Rust 1.90.0, `lupa==2.4`, luacheck version.
+- **Every job has `timeout-minutes`**, at most 120 (the gates `changes`, `ci-ok` and `ready` at most 5). `tests/workflows_check.py` enforces it, as the `ci` repo's `check-workflow-timeouts` does for the private repos (a public repo's CI can't read the private `ci` repo).
+- A label read by a job (`native-build`, `golden-break`) is read from the PR when the job runs, so adding it and choosing "Re-run failed jobs" is enough.
 - Tag workflows (`addon-v*`, `uploader-v*`, `uploader-app-v*`) call the same jobs, then build and publish with their existing write permissions. `pull_request:` is removed from the release workflow.
 - `dependabot.yml` for cargo, github-actions and pip.
 - **Step summary:** one Markdown table, one row per failure (job › test › first error line). Agents read this, not logs.
 
+### Where jobs run (AD14, 2026-11-18)
+All jobs run on **GitHub-hosted runners**: Linux for everything but the native build, Windows and macOS for that. Why, and not the org's self-hosted runners (`[self-hosted, Linux, X64]`) that the site repos use:
+- This repo is **public**, and GitHub doesn't meter hosted minutes for public repos, so "Actions minutes are nearly used up" doesn't apply to it.
+- The org's only runner group serves **the org's private repos only** (public repos are not allowed in it). A job here asking for those labels would wait for a runner that never comes, and the org's alerting would report a runner down.
+- A public repo's fork PRs must never reach the owner's machines. A fork can change the workflow file in its own PR, so a job-level `if:` guard doesn't make self-hosted safe here.
+- Native Windows and macOS builds can't run on the Linux runners in any case. The cheap split: `native` runs only when uploader paths change (or the PR has `native-build`), and on tags (`uploader-app-release.yml`). A docs-only or addon-only PR never starts it.
+- `tests/workflows_check.py` rule R2 keeps every job on a hosted runner, so an agent can't switch one by accident.
+
+Moving the Linux jobs onto the org's runners later is a decision for the owner (Q7). It needs: the repo added to the runner group with "Allow public repositories" on (GitHub advises against it for public repos); `runs-on: [self-hosted, Linux, X64]` plus the fork guard `if:` on each job; and an answer for the `app` job, because those runners run as user `ci` with no sudo, no Rust and none of the Tauri system libraries (a container image, or libraries installed on every runner host). Then R2 and `ci.yml` change together.
+
 ## 4. Agent rules (copied into `AGENTS.md` by A0.2)
 - Run the commands for the area you touched before asking for review; read the CI summary, not logs.
+- After every push, run `../ci/tools/pr-wait <repo> <pr>` as a background command, and fix a red `ci-ok` yourself. Never sleep-poll or watch runs in a loop (`ci/AGENTS.md`, "Waiting for CI").
 - Wire-format changes follow `contract/SPEC.md` §5.2: new version, new golden files, never edit an old one, link the matching site PR.
 - Never claim in-game or native behaviour was verified unless wowless/the smoke JSON or the checklist shows it. Write "not verified in game" plainly otherwise.
 - Never claim CI passed without the run link for the head SHA. Never skip, disable or loosen a test, and never mark the wowless job non-blocking, to get green.
@@ -57,26 +72,4 @@ Every command prints failures plus one summary line.
 - One task from `06-plan.md` per PR; follow the PR template.
 
 ## 5. PR template (`.github/pull_request_template.md`)
-```markdown
-## Task
-<!-- plan id (e.g. A2) and summary -->
-
-## Area
-- [ ] addon (Lua)  - [ ] uploader core  - [ ] uploader UI  - [ ] uploader app/native  - [ ] CI/release  - [ ] contract
-
-## Requirements → tests
-| # | Requirement | Test (file › name) | Result |
-|---|---|---|---|
-
-## Wire format
-- Export types/versions changed: none / list (new `contract/golden/...` files)
-- Endpoints/envelopes changed: none / list
-- Site PR: none / <link>
-
-## Checks
-- CI run for head SHA: <link>
-- wowless scenarios: pass / n/a
-- ARIA snapshot changes: none / list + why
-- Native checklist: n/a / Windows __ macOS __ (release PRs)
-- In-game checklist: n/a / client __ (release PRs)
-```
+The org's shape, as in the site repos: a first line, `## Summary` (two or three plain sentences), `## Check it yourself` (what to do → what you should see, each item verified by the agent first, with direct links), then a folded **Agent notes** block. This repo's own fields live in the Agent notes: task id, area, requirements → tests, wire-format changes with the site PR link, what was not verified (in game, natively), exceptions, rollback, follow-ups. The first line is `**Preview:** n/a: …` because this repo has no previews and the owner merges every PR: `none` would let the shared `pr-automerge` merge it (AGENTS.md rule 12, Q8). The file itself is added by A0.2.

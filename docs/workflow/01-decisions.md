@@ -34,3 +34,8 @@ The owner made these on 2026-11-13. Decisions shared with the site repo are summ
 
 ### AD13. Manual in-game checks only for what wowless can't reach
 - **Decision:** before tagging an addon release, the owner runs a short checklist in the real client for the things no emulator sees: a real guild bank open, real guild roster and rank names, addon-to-addon comms between two players, and the uploader picking up a real SavedVariables file. Result recorded in the release PR. Feature PRs rely on CI.
+
+### AD14. CI follows the org's conventions; hosted runners here (2026-11-18)
+- **Decision:** the repo moved into the guild's GitHub organization and its CI follows the org's shared conventions (the shared `ci` repo): the one check `ci-ok`; the `ready` step (`ready-for-review` and `ci-failed` labels, `ready.yml`); `timeout-minutes` on every job; agents run `ci/tools/pr-wait` in the background after every push and fix red CI themselves. Jobs stay on **GitHub-hosted runners**, because the repo is public (no metered minutes), the org's runner group doesn't serve it, and fork PRs must not reach the owner's machines. Native Windows and macOS builds run only when uploader paths change, on the `native-build` label, and on tags. Details and the way to move: `05-verification.md` §3.
+- **Supersedes:** AD9's runner and job list where they differ. Everything else in AD9 stands.
+- **Needs the owner (Q7, Q8):** whether to open the org's runners to this public repo (the default is no), and installing the org's CI bot (a GitHub App) on this repo, which today covers only the org's private repos.
