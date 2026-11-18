@@ -1,0 +1,211 @@
+name: ci
+# PR checks, the org's way (the shared ci repo's AGENTS.md and docs/PLAN.md §5 and §7.1; docs/workflow/05-verification.md §3
+# here). Each area runs only when its files change. `ci-ok` is THE check: pr-wait, pr-automerge, the `ready` job below and
+# the owner's `main` ruleset read only it, and it counts skipped jobs as passed. Agents: read the ci-ok job log, then run
+# `../ci/tools/pr-wait <repo> <pr>` in the background after every push.
+#
+# Where it runs: GitHub-hosted runners, on purpose. This repo is PUBLIC, and GitHub doesn't meter hosted minutes for public
+# repos, so the "Actions minutes are nearly used up" reason for the org's self-hosted runners doesn't apply here. Two more
+# reasons keep it off them: the org's runner group serves only the org's private repos (a job asking for
+# [self-hosted, Linux, X64] here would sit queued until the org's alerting reports a runner down), and a public repo's fork
+# PRs must never reach the owner's machines. tests/workflows_check.py enforces it. To move later, see 05-verification.md §3.
+# Native Windows and macOS builds can't run on the Linux runners anyway: `native` runs only when uploader paths change or the
+# PR has the `native-build` label (and on tags, in uploader-app-release.yml).
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+defaults:
+  run:
+    shell: bash   # bash -eo pipefail
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read   # paths-filter lists the PR's files, and the label step reads the PR's labels
+    outputs:
+      addon: ${{ github.event_name != 'pull_request' || steps.f.outputs.addon == 'true' }}
+      core: ${{ github.event_name != 'pull_request' || steps.f.outputs.core == 'true' }}
+      ui: ${{ github.event_name != 'pull_request' || steps.f.outputs.ui == 'true' }}
+      app: ${{ github.event_name != 'pull_request' || steps.f.outputs.app == 'true' }}
+      workflows: ${{ github.event_name != 'pull_request' || steps.f.outputs.workflows == 'true' }}
+      contract: ${{ github.event_name == 'pull_request' && steps.f.outputs.contract == 'true' }}
+      native: ${{ steps.f.outputs.native == 'true' || steps.labels.outputs.native == 'true' }}
+      labels: ${{ steps.labels.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            addon: ['addon/**', 'tests/**', 'contract/**', 'scripts/build-addon.sh', '.github/workflows/addon-checks.yml', '.github/workflows/ci.yml']
+            core: ['uploader/core/**', 'uploader/Cargo.*', 'contract/**', '.github/workflows/ci.yml']
+            ui: ['uploader/app/ui/**', 'contract/golden/uploader/**', '.github/workflows/ci.yml']
+            app: ['uploader/app/src-tauri/**', 'uploader/Cargo.*', 'uploader/core/**', '.github/workflows/ci.yml']
+            native: ['uploader/app/**', 'uploader/core/**', 'uploader/Cargo.*', '.github/workflows/uploader-app-build.yml']
+            workflows: ['.github/**', 'scripts/ci/**', 'tests/workflows_check.py', 'tests/ready_test.py']
+            contract: ['contract/**', 'tests/golden-add-only.sh']
+      # Read now, not from the event: a re-run keeps the labels the PR had when it was opened or pushed, so a label
+      # added afterwards (native-build, golden-break) takes effect on "Re-run failed jobs".
+      - name: Read the PR's labels
+        id: labels
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          names=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '[.labels[].name] | join(",")')
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+          case ",$names," in *,native-build,*) echo "native=true" >> "$GITHUB_OUTPUT" ;; esac
+
+  branding:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # Fork PRs get no secrets, so the script skips; it runs again on push to main.
+      - name: No branding
+        env: { BRANDING_WORDS: "${{ secrets.BRANDING_WORDS }}" }
+        run: scripts/check-no-branding.sh
+
+  # The workflows themselves: timeouts, runners, triggers, and the ready step's logic (tests/workflows_check.py,
+  # tests/ready_test.py). The ci repo's check-workflow-timeouts can't be read from here (private repo), so this repo
+  # carries the same rules.
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install -q pyyaml==6.0.2
+      - run: python tests/workflows_check.py
+      - run: python tests/ready_test.py
+
+  addon:
+    needs: changes
+    if: needs.changes.outputs.addon == 'true'
+    uses: ./.github/workflows/addon-checks.yml
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults: { run: { working-directory: uploader } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "uploader -> target", key: core }
+      - run: cargo test -p guild-uploader-core --locked
+
+  ui:
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - working-directory: uploader/app/ui
+        run: node --test
+
+  app:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults: { run: { working-directory: uploader } }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tauri system libraries
+        working-directory: .
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libsoup-3.0-dev
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "uploader -> target", key: app }
+      - run: cargo test -p guild-uploader-app --locked
+
+  # The wire format's golden files are add-only (contract/SPEC.md 5.2): changing, renaming or deleting one fails unless the
+  # PR has the `golden-break` label. The label comes from `changes`, which reads it when it runs.
+  contract:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Golden files are add-only (contract/SPEC.md 5.2)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GOLDEN_BREAK: ${{ contains(format(',{0},', needs.changes.outputs.labels), ',golden-break,') && '1' || '' }}
+        run: sh tests/golden-add-only.sh "$BASE"
+
+  native:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    uses: ./.github/workflows/uploader-app-build.yml
+
+  # The verdict: passes when every job above succeeded or was skipped on purpose (path filter), else fails, and prints
+  # one table (also in the step summary).
+  ci-ok:
+    if: ${{ !cancelled() }}   # not always(): a run cancelled by a newer push or a base change must not report a red ci-ok
+    needs: [changes, branding, workflows, addon, core, ui, app, contract, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          table = "### ci\n| job | result |\n|---|---|\n" + "".join(f"| {k} | {v['result']} |\n" for k, v in needs.items())
+          print(table)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(table)
+          bad = {k: v["result"] for k, v in needs.items() if v["result"] not in ("success", "skipped")}
+          for k, r in bad.items():
+              print(f"::error title=ci-ok::job {k} ended {r}")
+          sys.exit(1 if bad else 0)
+          PY
+
+  # The ready step (ci docs/PLAN.md §7.1, scripts/ci/ready.py): once the PR's head commit has its ci-ok verdict, label
+  # it ready-for-review or ci-failed. ready.yml does the same when a draft is marked ready. It runs after ci-ok, so it
+  # can't change the verdict, and an API hiccup only warns (continue-on-error covers the rest). Same-repo PRs only: a
+  # fork's token can't write labels.
+  ready:
+    needs: ci-ok
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write  # labels on a PR: the labels API wants this, issues: write alone gets a 403 on a pull request
+      issues: write         # labels
+      checks: read          # the ci-ok check run
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha }}", persist-credentials: false }
+      - name: Label the PR ready-for-review or ci-failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CI_OK_RESULT: ${{ needs.ci-ok.result }}
+        run: python3 scripts/ci/ready.py "$SHA"

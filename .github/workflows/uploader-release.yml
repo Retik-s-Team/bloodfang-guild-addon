@@ -14,6 +14,7 @@ jobs:
           - { os: windows-2022, target: x86_64-pc-windows-msvc, ext: ".exe" }
           - { os: macos-14, target: universal-apple-darwin, ext: "" }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     defaults: { run: { shell: bash, working-directory: uploader } }
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +44,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }

@@ -1,0 +1,32 @@
+name: ready
+# The ready step when a draft is marked ready for review (ci docs/PLAN.md §7.1, scripts/ci/ready.py): re-checks the PR's
+# head commit, since ci.yml does nothing on this event. ci.yml's own `ready` job covers every push. Same shape as the
+# site repo's ready.yml.
+on:
+  pull_request:
+    types: [ready_for_review]
+permissions:
+  contents: read
+# Its own group, so it never cancels a running ci.
+concurrency:
+  group: ready-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  ready:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: write  # labels on a PR: the labels API wants this, issues: write alone gets a 403 on a pull request
+      issues: write         # labels
+      checks: read          # the ci-ok check run
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha }}", persist-credentials: false }
+      - name: Label the PR ready-for-review or ci-failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/ready.py "$SHA"
