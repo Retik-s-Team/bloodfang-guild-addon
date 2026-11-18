@@ -1,0 +1,49 @@
+# Synced from the ci repo's templates/ISSUE_TEMPLATE/agent-task.yml by tools/sync-shared; edit it there. No organization
+# or repo names in it: one site repo's no-branding check bans them, and the same copy goes to every repo.
+# Bots creating the issue through the API (no form) send the same body:
+#   ### Repo\n\n<this repo|ci>\n\n### Goal\n\n<text>\n\n### Acceptance\n\n<text>\n\n### No-approval OK?\n\n<Yes|No>
+# plus the label agent-task.
+name: Agent task
+description: A task for an agent. It branches agent/<issue>-<slug> and opens a PR that closes this issue.
+title: "<area>: <what should change>"
+labels: ["agent-task"]
+body:
+  - type: dropdown
+    id: repo
+    attributes:
+      label: Repo
+      description: The repo this issue is in, or the shared ci repo when the change belongs there.
+      options:
+        - this repo
+        - ci
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be different when this is done, and why. Plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How you will check it. One line each, "<what to do> → <what you should see>".
+      placeholder: |
+        - Open the wiki page → sections can be dragged into a new order
+    validations:
+      required: true
+  - type: dropdown
+    id: no-approval
+    attributes:
+      label: No-approval OK?
+      description: >-
+        Yes = if the PR only touches no-approval files (STATUS.md, README.md, docs/ except
+        decisions/plans/specs/validation), it may merge on its own once ci-ok is green.
+        No = always wait for your approval.
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
