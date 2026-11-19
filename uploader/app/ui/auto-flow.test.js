@@ -16,7 +16,7 @@ assert.ok(js.includes("defer_app_update"));
 assert.ok(js.includes("accept_app_update"));
 assert.ok(!js.includes('invoke("upload_now")'));
 assert.ok(js.includes("update is available. Update the app now?"));
-assert.ok(!js.includes("A Bloodfang App update"));
+assert.ok(!js.includes(" App update")); // the old prompt named the earlier product
 assert.ok(js.includes("querySelector(\"h1\")"));
 
 console.log("auto-flow.test.js ok");
