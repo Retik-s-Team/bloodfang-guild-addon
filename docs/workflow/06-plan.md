@@ -35,12 +35,17 @@ Each task is one PR with **goal, read, deliver, acceptance**. Every task follows
 | A8 | **In-game release checklist** (AD13): `docs/testing/in-game-checklist.md` (only what wowless can't do), release PR section. Acceptance: under 15 steps, each with an expected result. | XS |
 | A9 | **Import signatures** (SPEC §6 gap 3; the owner's 2026-11-04 deferral). Deliver: ship the site's public key in the build config and verify Ed25519 on `link-ok` before replacing a secret, with a Lua implementation tested against site-generated golden strings. **[Owner]** decides when (Q2). | M |
 
+## Fixes
+| ID | Task | Size |
+|---|---|---|
+| A10 | **Recipes on the WoW Forever client** (site P5.5; the owner, 2026-11-17: `Recipes.lua:29: attempt to call a nil value`, seen 14 times). Cause: that client (interface 16001) has `C_TradeSkillUI` only, no `GetTradeSkillLine` and the other old trade skill globals. Deliver: scan through `C_TradeSkillUI` when the old globals are absent; skip linked, guild and NPC windows; retry while the list loads; Classic Era unchanged; `run.py` cases for both APIs. Acceptance: the cases fail on `main` with the in-game error and pass after. | S |
+
 ## Order
 ```
 A0.2 → A1.1 → A1.2
 A1.1 → A2 → (A2.1 ∥ A5 ∥ site P5.1)
 A1.1 → A3 → A4
-A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says
+A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says;  A10 any time
 ```
 Before Tuesday 13:00 (Claude Code only): A0.2, A1.1, A1.2, A2 are realistic.
 
