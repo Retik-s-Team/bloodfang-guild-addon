@@ -1,5 +1,5 @@
-# bloodfang-guild-addon
-Bloodfang guild addon and optional uploader for WoW: Forever. Open source so anyone can review it.
+# Guild addon and uploader
+A guild addon and optional uploader for WoW: Forever. Open source so anyone can review it. The source names no guild: a build gets its guild, site and names from the build config (repository variables, `uploader/app/site.url` and `uploader/app/src-tauri/tauri.conf.json`).
 
 ## What's here
 - `addon/`: the in-game addon. Captures the guild bank (every tab you can view, with item icons and gold) when you open it, saves your profession recipes when you open a profession window, links your character to the site, and shares your zone with online guildmates (in game only; `<cmd> location off` to stop).

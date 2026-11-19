@@ -3,6 +3,24 @@
 ; copies and their shortcuts. A silent uninstall leaves the delete-data
 ; checkbox unset. Prefs stay in guild-uploader and the sign-in stays in the
 ; OS keyring. The bundle identifier is unchanged.
+;
+; No product, publisher or executable name is written here. They come from
+; tauri.conf.json through the template's defines (PRODUCTNAME, MANUFACTURER,
+; MAINBINARYNAME). The template includes this file before it defines them, so
+; use them only inside the hook macros, which expand where they are inserted.
+;
+; The earlier names:
+; - "Guild Uploader" under "raidgroup" (no publisher set, so the template used
+;   the identifier's second part).
+; - LEGACYPRODUCTNAME under the current publisher: the product name with
+;   " Uploader" replaced by " App". Builds whose product name doesn't end in
+;   " Uploader" have no such name and skip it.
+
+!macro DefineLegacyProductName
+  !ifndef LEGACYPRODUCTNAME
+    !searchreplace LEGACYPRODUCTNAME "${PRODUCTNAME}" " Uploader" " App"
+  !endif
+!macroend
 
 !macro RemoveOnePrevious REGPATH UNINSTKEY LEFTOVER
   Push $R7
@@ -34,7 +52,10 @@
 
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro RemoveOnePrevious "Software\raidgroup\Guild Uploader" "Software\Microsoft\Windows\CurrentVersion\Uninstall\Guild Uploader" "The earlier Guild Uploader install is still there. Close it, then run this installer again. Saved sign-in and settings were not removed."
-  !insertmacro RemoveOnePrevious "Software\Bloodfang Guild\Bloodfang App" "Software\Microsoft\Windows\CurrentVersion\Uninstall\Bloodfang App" "The earlier Bloodfang App install is still there. Close it, then run this installer again. Saved sign-in and settings were not removed."
+  !insertmacro DefineLegacyProductName
+  !if "${LEGACYPRODUCTNAME}" != "${PRODUCTNAME}"
+    !insertmacro RemoveOnePrevious "Software\${MANUFACTURER}\${LEGACYPRODUCTNAME}" "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACYPRODUCTNAME}" "The earlier ${LEGACYPRODUCTNAME} install is still there. Close it, then run this installer again. Saved sign-in and settings were not removed."
+  !endif
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -45,9 +66,12 @@
   Push $R8
   ReadRegStr $R8 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "guild-uploader-app"
   ${If} $R8 != ""
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "guild-uploader-app" '"$INSTDIR\Bloodfang Uploader.exe" --hidden'
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "guild-uploader-app" '"$INSTDIR\${MAINBINARYNAME}.exe" --hidden'
   ${EndIf}
-  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Bloodfang App"
+  !insertmacro DefineLegacyProductName
+  !if "${LEGACYPRODUCTNAME}" != "${PRODUCTNAME}"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${LEGACYPRODUCTNAME}"
+  !endif
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Guild Uploader"
   ; 0.1.0 shipped the update checker as guild-uploader-verify-update.exe. It is
   ; updater.exe now, so drop the old copy left in the install directory.
