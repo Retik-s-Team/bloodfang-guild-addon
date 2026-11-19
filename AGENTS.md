@@ -33,7 +33,7 @@ PATH=$PWD/v/bin:$PATH sh tests/package-check.sh                 # addon packagin
 (cd uploader && cargo test -p guild-uploader-core --locked)     # core (~1 s after the first build)
 (cd uploader && cargo test -p guild-uploader-app --locked)      # app (needs Tauri system libs on Linux)
 (cd uploader/app/ui && node --test)                             # window UI logic
-BRANDING_WORDS=... scripts/check-no-branding.sh                 # CI runs it with a repo secret
+scripts/check-no-branding.sh                                    # config names; CI adds BRANDING_WORDS (repo secret)
 python3 tests/workflows_check.py && python3 tests/ready_test.py # workflow rules, ready step (needs PyYAML)
 ../ci/tools/pr-wait <repo> <pr>                                 # after every push, in the background (rule 3)
 ```

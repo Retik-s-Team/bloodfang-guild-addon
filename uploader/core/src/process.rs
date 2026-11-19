@@ -142,6 +142,12 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    /// The desktop app's executable name, from the packaging config (tauri.conf.json mainBinaryName).
+    fn shipped_binary_name() -> String {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../app/src-tauri/tauri.conf.json")).unwrap();
+        conf["mainBinaryName"].as_str().expect("mainBinaryName").to_string()
+    }
+
     #[test]
     fn game_image_names_match_and_this_app_does_not() {
         assert!(is_game_process("Wow.exe"));
@@ -150,7 +156,7 @@ mod tests {
         assert!(is_game_process("World of Warcraft"));
         assert!(is_game_process("/Applications/World of Warcraft/_classic_/World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic"));
         assert!(!is_game_process("guild-uploader-app.exe"));
-        assert!(!is_game_process("Bloodfang Uploader.exe"));
+        assert!(!is_game_process(&format!("{}.exe", shipped_binary_name())));
         assert!(!is_game_process("gh.exe"));
         assert!(!is_game_process("tasklist.exe"));
         assert!(!is_game_process("explorer.exe"));
