@@ -105,6 +105,67 @@ for label, mk, shim in [("luajit", LJ.LuaRuntime, False), ("lua51", L51.LuaRunti
       return n, asked, GuildaddonDB.guild ~= nil
     end""")(ns)
     assert list(sched) == [2, 1, True], (label, list(sched))
+    # Recipes from the profession window (Recipes.lua). The WoW Forever client (interface 16001) has the modern
+    # C_TradeSkillUI API and none of the old GetTradeSkill*/GetCraft* globals; Classic Era has the old ones.
+    rec = lua.eval(r"""function(ns)
+      local queue
+      C_Timer.After = function(d, f) queue[#queue + 1] = f end
+      local key = "recipes:" .. E2E_GUID .. ":Alchemy"
+      -- Opens the window, runs the scheduled scans (and any retries they schedule), returns what was saved.
+      local function open()
+        queue, GuildaddonDB.outbox[key] = {}, nil
+        for _, fn in ipairs(ns.events.TRADE_SKILL_SHOW) do fn() end
+        local i, ok, err = 1, true, nil
+        while queue[i] and i <= 20 do ok, err = pcall(queue[i]) if not ok then break end i = i + 1 end
+        local e = GuildaddonDB.outbox[key]
+        if not e then return ok, err, "nothing saved" end
+        local _, _, j = ns.decodeString(e.s)
+        return ok, err, j.p.profession .. " " .. j.p.skill .. " " .. table.concat(j.p.recipes, ",")
+      end
+      local legacy = { "GetTradeSkillLine", "GetNumTradeSkills", "GetTradeSkillInfo", "GetTradeSkillRecipeLink", "GetTradeSkillItemLink" }
+      for _, n in ipairs(legacy) do _G[n] = nil end
+      local r, linked, ready, learned = {}, false, true, { [3170] = true, [2330] = true, [7183] = false }
+      C_TradeSkillUI = {
+        GetBaseProfessionInfo = function() return { professionID = 171, professionName = "Alchemy", skillLevel = 0, maxSkillLevel = 0 } end,
+        GetChildProfessionInfo = function() return { professionID = 2485, professionName = "Alchemy", skillLevel = 215, maxSkillLevel = 225 } end,
+        GetAllRecipeIDs = function() return { 3170, 7183, 2330, 3170 } end,
+        GetRecipeInfo = function(id) return { recipeID = id, learned = learned[id] } end,
+        IsTradeSkillLinked = function() return linked end,
+        IsTradeSkillGuild = function() return false end,
+        IsNPCCrafting = function() return false end,
+        IsTradeSkillReady = function() return ready end,
+      }
+      -- R1: modern client, own profession: learned recipe IDs and the skill level are saved, no error.
+      r[#r + 1] = { open() }
+      -- R2: someone else's linked profession window is not saved as this character's.
+      linked = true r[#r + 1] = { open() } linked = false
+      -- R3: list not ready when the timer fires: scanned again later instead of saving nothing.
+      local polls = 0
+      C_TradeSkillUI.IsTradeSkillReady = function() polls = polls + 1 return polls > 2 end
+      r[#r + 1] = { open() }
+      -- R4: neither API present: no error, nothing saved.
+      C_TradeSkillUI = nil
+      r[#r + 1] = { open() }
+      -- R5: Classic Era globals (with Era's partial C_TradeSkillUI) still work.
+      C_TradeSkillUI = { GetTradeSkillDisplayName = function() return "Alchemy" end }
+      local rows = { { "Elixirs", "header" }, { "Elixir of Lion's Strength", "easy", "|cffffffff|Henchant:2329|h[Elixir of Lion's Strength]|h|r" },
+        { "Minor Healing Potion", "trivial", "|Hspell:2330|h" } }
+      GetTradeSkillLine = function() return "Alchemy", 120, 150 end
+      GetNumTradeSkills = function() return #rows end
+      GetTradeSkillInfo = function(i) return rows[i][1], rows[i][2] end
+      GetTradeSkillRecipeLink = function(i) return rows[i][3] end
+      GetTradeSkillItemLink = function() return nil end
+      r[#r + 1] = { open() }
+      for _, n in ipairs(legacy) do _G[n] = nil end
+      C_TradeSkillUI = nil
+      local res = {}
+      for i, x in ipairs(r) do res[i] = tostring(x[1]) .. "|" .. tostring(x[2]) .. "|" .. tostring(x[3]) end
+      return table.concat(res, "\n")
+    end""")(ns).split("\n")
+    want = ["true|nil|Alchemy 215 2330,3170", "true|nil|nothing saved", "true|nil|Alchemy 215 2330,3170",
+            "true|nil|nothing saved", "true|nil|Alchemy 120 2329,2330"]
+    for i, (got, exp) in enumerate(zip(rec, want), 1):
+        assert got == exp, (label, "recipes R%d" % i, got, exp)
     out[label] = {"sha": h[0], "hmac": h[1], "gbank": gb, "recipes": rc, "ranks": rk, "roundtrip": list(rt)}
     print(label, h[0][:16], h[1][:16], len(gb), list(rt))
 for k, r in out.items():
