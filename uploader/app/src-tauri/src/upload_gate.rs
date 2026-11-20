@@ -201,6 +201,26 @@ impl Flight {
         }
     }
 
+    /// For an app update: take the flight only when no upload is running, and never queue one.
+    /// While it is held, upload triggers wait (`acquire` marks them pending) until the app exits.
+    pub fn hold(&self) -> bool {
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        if guard.running {
+            false
+        } else {
+            guard.running = true;
+            guard.pending = false;
+            true
+        }
+    }
+
+    /// Undo `hold` when the update did not start. `true` when an upload was asked for meanwhile.
+    pub fn release(&self) -> bool {
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        guard.running = false;
+        std::mem::take(&mut guard.pending)
+    }
+
     /// `true` when a trigger arrived while this upload was running.
     pub fn take_repeat(&self) -> bool {
         let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
@@ -211,6 +231,20 @@ impl Flight {
             guard.running = false;
             false
         }
+    }
+}
+
+/// Wait up to `timeout` for the running upload to finish, then hold the flight (see `Flight::hold`).
+pub fn wait_for_hold(flight: &Flight, timeout: std::time::Duration, pause: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if flight.hold() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(pause);
     }
 }
 

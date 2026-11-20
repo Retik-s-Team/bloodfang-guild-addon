@@ -469,16 +469,15 @@ $("btn-app-later").addEventListener("click", async () => {
 
 $("btn-app-update").addEventListener("click", async () => {
   $("btn-app-update").disabled = true;
-  try {
-    const result = await invoke("accept_app_update");
-    $("app-update-note").hidden = false;
-    $("app-update-note").textContent = result?.message || "Nothing was downloaded or restarted.";
-  } catch (e) {
-    $("app-update-note").hidden = false;
-    $("app-update-note").textContent = String(e);
-  } finally {
-    $("btn-app-update").disabled = false;
-  }
+  $("btn-app-later").disabled = true;
+  $("app-update-note").hidden = false;
+  $("app-update-note").textContent = "Downloading and checking the update…";
+  const result = await invoke("accept_app_update").catch((e) => ({ installed: false, message: String(e) }));
+  // Once the update has started, the app closes and reopens on the new version by itself.
+  const updating = result?.installed === true;
+  $("app-update-note").textContent = result?.message || "Nothing was downloaded or restarted.";
+  $("btn-app-later").disabled = updating;
+  $("btn-app-update").disabled = updating;
 });
 
 listen("addon-auto", (event) => {

@@ -973,13 +973,16 @@ struct AppUpdateGate {
 #[tauri::command]
 async fn accept_app_update(app: AppHandle) -> Result<AppUpdateGate, String> {
     let repo = defaults_repo();
+    // A window that is hidden in the tray (only possible for a future background update) stays hidden after the update.
+    let relaunch_hidden = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).map(|visible| !visible).unwrap_or(false);
+    let handle = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         core::log::info("app-update", "Update now chosen");
         app_update::decide(
             app_update::Choice::UpdateNow,
             &app_update::trust_from_build(),
             || app_update::fetch_published(&repo),
-            platform_install,
+            |bytes| install_holding_uploads(&handle, bytes, relaunch_hidden),
         )
     })
     .await
@@ -991,7 +994,11 @@ async fn accept_app_update(app: AppHandle) -> Result<AppUpdateGate, String> {
     } else {
         reports::report(core::report::code::APP_UPDATE_INSTALL, &format!("app update failed: {}", result.message), None);
     }
-    let message = if result.installed && cfg!(target_os = "macos") { app_update::mac_installed_message(&result.message) } else { result.message };
+    let message = match (result.installed, cfg!(target_os = "macos")) {
+        (true, true) => app_update::mac_installed_message(&result.message),
+        (true, false) => app_update::windows_updating_message(&result.message),
+        (false, _) => result.message,
+    };
     #[cfg(target_os = "macos")]
     if result.installed {
         // Let the window show the message, then start the new bundle in place of this one.
@@ -1003,20 +1010,51 @@ async fn accept_app_update(app: AppHandle) -> Result<AppUpdateGate, String> {
         });
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = app;
+    if result.installed {
+        // The installer is running. Exit now so it finds no running copy and no locked files; it
+        // starts the new version when it is done. Uploads stay held until then.
+        core::log::info("app-update", "exiting so the installer can replace the app; it starts the new version");
+        if let Some(life) = app.try_state::<TrayLife>() {
+            life.exiting.store(true, Ordering::SeqCst);
+        }
+        app.exit(0);
+    }
     Ok(AppUpdateGate { installed: result.installed, message })
 }
 
-/// Windows starts the verified NSIS installer (unchanged). macOS replaces the running .app with
-/// the verified .app.tar.gz.
-fn platform_install(bytes: &[u8]) -> Result<(), String> {
+/// Upload passes are short; wait this long for one to finish before giving up on the update.
+const UPDATE_WAITS_FOR_UPLOAD: Duration = Duration::from_secs(120);
+
+/// Waits for a running upload, holds new ones off, then installs. Uploads resume if it fails.
+fn install_holding_uploads(app: &AppHandle, bytes: &[u8], relaunch_hidden: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if !upload_gate::wait_for_hold(&state.upload_flight, UPDATE_WAITS_FOR_UPLOAD, Duration::from_millis(250)) {
+        return Err("An upload is still running. Choose Update now again in a minute.".into());
+    }
+    let installed = platform_install(bytes, relaunch_hidden);
+    if installed.is_err() && state.upload_flight.release() {
+        // A file change arrived while the update held uploads. Send it now.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = perform_upload(&app) {
+                core::log::warn("upload", &format!("upload after a failed app update: {err}"));
+            }
+        });
+    }
+    installed
+}
+
+/// Windows runs the verified NSIS installer as an in-place update (see `app_update::nsis_update_args`).
+/// macOS replaces the running .app with the verified .app.tar.gz.
+fn platform_install(bytes: &[u8], relaunch_hidden: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let _ = relaunch_hidden; // the restart keeps this process's own arguments
         mac_update::install_verified_archive(bytes)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        app_update::launch_verified_installer(bytes)
+        app_update::launch_verified_installer(bytes, relaunch_hidden)
     }
 }
 

@@ -2,9 +2,14 @@
 //! This build has no trusted public key, so the command stops before any download.
 //! A published file alone does not pass: the key has to be present at compile time
 //! as GUILD_UPLOADER_UPDATE_PUBKEY (64 hex characters). No private key is stored here.
+//!
+//! On Windows the verified installer replaces this install in place: it runs with the Tauri NSIS
+//! template's update flags (see `nsis_update_args`), the app exits, and the installer starts the
+//! new version when it is done.
 
 use guild_uploader_core as core;
 use ring::signature::{UnparsedPublicKey, ED25519};
+use std::path::{Path, PathBuf};
 
 pub const NO_TRUST_KEY: &str = "This build has no trusted update key, and no verified installer is published. Nothing was downloaded or restarted.";
 
@@ -197,15 +202,57 @@ pub fn mac_installed_message(verified: &str) -> String {
     format!("Verified {version}. The app was updated and is restarting.")
 }
 
-/// Writes the already-verified bytes and starts that file. Tests do not call this with real bytes.
-pub fn launch_verified_installer(bytes: &[u8]) -> Result<(), String> {
+/// Windows: the app closes and the installer starts it again, so say that instead.
+pub fn windows_updating_message(verified: &str) -> String {
+    let version = verified.strip_prefix("Verified ").and_then(|r| r.split(". ").next()).unwrap_or("the update");
+    format!("Verified {version}. The app is closing to update and will reopen by itself.")
+}
+
+/// File name of the verified installer in the temp folder.
+pub const INSTALLER_FILE: &str = "guild-uploader-update.exe";
+
+/// Arguments for the Tauri v2 NSIS installer (`installer.nsi` in tauri-bundler) to update this
+/// install in place, the same ones tauri-plugin-updater passes in its passive mode:
+/// - `/P` passive: every page is skipped; only a progress bar shows, and it closes by itself.
+///   Unlike `/S` (silent), an error still shows a message box.
+/// - `/UPDATE`: the reinstall page goes straight on without running the old uninstaller, keeps
+///   the shortcuts and the start-at-login value, and never touches the app data.
+/// - `/R`: start the app when the install is done (honoured with `/P` or `/S` only).
+/// - `/ARGS`: the arguments for that start. It reads to the end of the command line, so it is last.
+///
+/// The template also closes a still-running copy through the Restart Manager without asking in
+/// passive mode, and `installMode: currentUser` makes it run without elevation (no UAC prompt).
+pub fn nsis_update_args(relaunch_hidden: bool) -> Vec<String> {
+    let mut args: Vec<String> = ["/P", "/UPDATE", "/R"].iter().map(|a| a.to_string()).collect();
+    if relaunch_hidden {
+        args.push("/ARGS".into());
+        args.push("--hidden".into());
+    }
+    args
+}
+
+/// Writes the already-verified bytes to `dir` as an .exe and hands it to `spawn` with `args`.
+pub fn launch_installer_in<S>(dir: &Path, bytes: &[u8], args: &[String], spawn: S) -> Result<PathBuf, String>
+where
+    S: FnOnce(&Path, &[String]) -> std::io::Result<()>,
+{
     if bytes.is_empty() {
         return Err("The verified installer was empty, so it was not started.".into());
     }
-    let path = std::env::temp_dir().join("guild-uploader-update.bin");
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    // CREATE_NO_WINDOW suppresses a console. A GUI installer still shows its own windows.
-    guild_uploader_core::background_command(&path).spawn().map_err(|e| format!("{e}"))?;
+    let path = dir.join(INSTALLER_FILE);
+    std::fs::write(&path, bytes).map_err(|e| format!("Couldn't save the installer to {} ({e}).", path.display()))?;
+    spawn(&path, args).map_err(|e| format!("Couldn't start the installer ({e})."))?;
+    Ok(path)
+}
+
+/// Writes the already-verified bytes and starts that file as an in-place update. The caller exits
+/// the app right after, so the installer can replace its files. Tests do not call this with real bytes.
+pub fn launch_verified_installer(bytes: &[u8], relaunch_hidden: bool) -> Result<(), String> {
+    let args = nsis_update_args(relaunch_hidden);
+    launch_installer_in(&std::env::temp_dir(), bytes, &args, |path, args| {
+        // CREATE_NO_WINDOW suppresses a console. The passive installer shows only its progress bar.
+        guild_uploader_core::background_command(path).args(args).spawn().map(|_| ())
+    })?;
     Ok(())
 }
 

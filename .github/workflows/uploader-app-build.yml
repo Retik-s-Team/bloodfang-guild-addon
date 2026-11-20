@@ -95,6 +95,11 @@ jobs:
           echo "nsi=$nsi"
           test -n "$nsi"
           grep -F 'hooks.nsh' "$nsi"
+          # Update now runs the installer with these flags (app_update::nsis_update_args). The generated
+          # installer must read each of them, and install per user so no UAC prompt appears.
+          for flag in /P /UPDATE /R /ARGS; do grep -F "\$CMDLINE \"$flag\"" "$nsi"; done
+          grep -F '!define INSTALLMODE "currentUser"' "$nsi"
+          grep -F 'RequestExecutionLevel user' "$nsi"
           installer=$(find target -path '*bundle*' -name '*.exe' ! -name '*uninstall*' | head -1)
           echo "installer=$installer"
           test -n "$installer"

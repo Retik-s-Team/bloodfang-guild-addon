@@ -229,7 +229,7 @@ Constants: `client_id=guild-uploader`, `scope=ingest`, transaction 5 min, code 6
 | `/api/uploader/ranks` | POST JSON | Bearer token | `{guild, t, ranks[]}` | 200 `{stored:true}` (stored or unchanged); 200 `{stored:false}` (older); 400 `{error}` = `bad_request`, `other_guild`, `bad_time`, `bad_ranks`, `invalid`; 401 `bad_token`; 403 `not_on_roster`/`not_officer`; 413 `too_large` (16 KiB); 429 `rate_limited` (60/h) (`site:src/app/api/uploader/ranks/route.ts:12-17`, `site:src/lib/rank-sync.ts:19-31`, `site:src/lib/rank-names.ts:117-126`) | 200 final; 401 `bad_token` stops the pass; 403/400 final refusal, not resent for that block; 404/429/other retry next pass (`uploader/core/src/ranks.rs:397-422`, `lib.rs:203-213`) |
 | `/api/uploader/logs` | POST JSON | Bearer optional | `{errorCode, message, appVersion, os, addonVersion?, log}` (log <= 64 KiB, body <= 80 KiB) | 201 `{ok, id}`; 400 `bad_request`, `bad_error_code`, `bad_app_version`, `bad_os`, `bad_addon_version`, `bad_log`; 413 `too_large`/`log_too_large`; 429 `rate_limited` (20/h token; 3/h per IP and 60/h total anonymous) (`site:src/lib/uploader-logs.ts:14-35`, `site:src/lib/uploader-log-rules.ts:5-50`) | any status is final, never retried; one report per code per hour (`uploader/core/src/report.rs:77-107`). Codes: `addon_check`, `addon_install`, `upload`, `app_update_check`, `app_update_install` (`report.rs:15-21`) |
 | `/api/addon/latest` | GET | none | - | 200 `{version, tag, publishedAt, assets:[{name, sizeBytes, sha256, url}]}`, cached 300 s; 404 `{error:"No release published yet"}` (`site:src/app/api/addon/latest/route.ts:8-9`) | needs a `<Addon>-*.zip` asset with 64-hex sha256 and https URL, else falls back to GitHub `addon-v*` + `SHA256SUMS` (`uploader/core/src/update.rs:65-127`) |
-| `/api/uploader/latest` | GET | none | - | same shape for `uploader-app-v*`; 404 until published (`site:src/app/api/uploader/latest/route.ts:8-9`) | not called. App updates read GitHub `uploader-app-v*` directly (`uploader/core/src/update.rs:487-494`, `uploader/app/src-tauri/src/app_update.rs:159`) |
+| `/api/uploader/latest` | GET | none | - | same shape for `uploader-app-v*`; 404 until published (`site:src/app/api/uploader/latest/route.ts:8-9`) | not called. App updates read GitHub `uploader-app-v*` directly (`uploader/core/src/update.rs:487-494`, `uploader/app/src-tauri/src/app_update.rs:164`) |
 
 ### 4.3 Per-string ingest errors
 
@@ -261,7 +261,7 @@ The uploader remembers handled strings by SHA-256 of the full string (`uploader/
 | Version other than 1 | import: `v > 1` refused (`addon/Core.lua:97`) | `v2+` silently skipped by extractor regex (`lib.rs:34`) | `unsupported_version` (`addon-codec.ts:55`) |
 | Old addon version | - | - | Not refused. `addon` string stored per ingest (`ingest.ts:48-50`); `AddonOutdated` banner if older than latest release (`ingest.ts:55-59`, `site:src/components/AddonOutdated.tsx:6-10`) |
 | Addon update | in-game `VER` warning after 2 newer senders (`addon/Comms.lua:27-36`) | site then GitHub, sha256 checked (`update.rs:80-127,234-244`) | `/api/addon/latest` |
-| App update | - | semver compare, deferred version skipped (`app_update.rs:44-55`) | `/api/uploader/latest` exists, unused |
+| App update | - | semver compare, deferred version skipped (`app_update.rs:49-60`) | `/api/uploader/latest` exists, unused |
 | Stored version | - | - | always `version: 1` (`ingest.ts:50`, `site:src/app/calendar/actions.ts:178`) |
 
 ### 5.2 Rules going forward
