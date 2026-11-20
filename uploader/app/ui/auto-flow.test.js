@@ -18,5 +18,8 @@ assert.ok(!js.includes('invoke("upload_now")'));
 assert.ok(js.includes("update is available. Update the app now?"));
 assert.ok(!js.includes(" App update")); // the old prompt named the earlier product
 assert.ok(js.includes("querySelector(\"h1\")"));
+// R5: once the verified update has started, the app closes; Update now and Later stay disabled meanwhile.
+assert.ok(js.includes("const updating = result?.installed === true;"));
+assert.ok(js.includes('$("btn-app-later").disabled = updating;'));
 
 console.log("auto-flow.test.js ok");

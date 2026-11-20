@@ -2,9 +2,14 @@
 //! This build has no trusted public key, so the command stops before any download.
 //! A published file alone does not pass: the key has to be present at compile time
 //! as GUILD_UPLOADER_UPDATE_PUBKEY (64 hex characters). No private key is stored here.
+//!
+//! On Windows the verified installer replaces this install in place: it runs with the Tauri NSIS
+//! template's update flags (see `nsis_update_args`), the app exits, and the installer starts the
+//! new version when it is done.
 
 use guild_uploader_core as core;
 use ring::signature::{UnparsedPublicKey, ED25519};
+use std::path::{Path, PathBuf};
 
 pub const NO_TRUST_KEY: &str = "This build has no trusted update key, and no verified installer is published. Nothing was downloaded or restarted.";
 
@@ -197,15 +202,57 @@ pub fn mac_installed_message(verified: &str) -> String {
     format!("Verified {version}. The app was updated and is restarting.")
 }
 
-/// Writes the already-verified bytes and starts that file. Tests do not call this with real bytes.
-pub fn launch_verified_installer(bytes: &[u8]) -> Result<(), String> {
+/// Windows: the app closes and the installer starts it again, so say that instead.
+pub fn windows_updating_message(verified: &str) -> String {
+    let version = verified.strip_prefix("Verified ").and_then(|r| r.split(". ").next()).unwrap_or("the update");
+    format!("Verified {version}. The app is closing to update and will reopen by itself.")
+}
+
+/// File name of the verified installer in the temp folder.
+pub const INSTALLER_FILE: &str = "guild-uploader-update.exe";
+
+/// Arguments for the Tauri v2 NSIS installer (`installer.nsi` in tauri-bundler) to update this
+/// install in place, the same ones tauri-plugin-updater passes in its passive mode:
+/// - `/P` passive: every page is skipped; only a progress bar shows, and it closes by itself.
+///   Unlike `/S` (silent), an error still shows a message box.
+/// - `/UPDATE`: the reinstall page goes straight on without running the old uninstaller, keeps
+///   the shortcuts and the start-at-login value, and never touches the app data.
+/// - `/R`: start the app when the install is done (honoured with `/P` or `/S` only).
+/// - `/ARGS`: the arguments for that start. It reads to the end of the command line, so it is last.
+///
+/// The template also closes a still-running copy through the Restart Manager without asking in
+/// passive mode, and `installMode: currentUser` makes it run without elevation (no UAC prompt).
+pub fn nsis_update_args(relaunch_hidden: bool) -> Vec<String> {
+    let mut args: Vec<String> = ["/P", "/UPDATE", "/R"].iter().map(|a| a.to_string()).collect();
+    if relaunch_hidden {
+        args.push("/ARGS".into());
+        args.push("--hidden".into());
+    }
+    args
+}
+
+/// Writes the already-verified bytes to `dir` as an .exe and hands it to `spawn` with `args`.
+pub fn launch_installer_in<S>(dir: &Path, bytes: &[u8], args: &[String], spawn: S) -> Result<PathBuf, String>
+where
+    S: FnOnce(&Path, &[String]) -> std::io::Result<()>,
+{
     if bytes.is_empty() {
         return Err("The verified installer was empty, so it was not started.".into());
     }
-    let path = std::env::temp_dir().join("guild-uploader-update.bin");
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    // CREATE_NO_WINDOW suppresses a console. A GUI installer still shows its own windows.
-    guild_uploader_core::background_command(&path).spawn().map_err(|e| format!("{e}"))?;
+    let path = dir.join(INSTALLER_FILE);
+    std::fs::write(&path, bytes).map_err(|e| format!("Couldn't save the installer to {} ({e}).", path.display()))?;
+    spawn(&path, args).map_err(|e| format!("Couldn't start the installer ({e})."))?;
+    Ok(path)
+}
+
+/// Writes the already-verified bytes and starts that file as an in-place update. The caller exits
+/// the app right after, so the installer can replace its files. Tests do not call this with real bytes.
+pub fn launch_verified_installer(bytes: &[u8], relaunch_hidden: bool) -> Result<(), String> {
+    let args = nsis_update_args(relaunch_hidden);
+    launch_installer_in(&std::env::temp_dir(), bytes, &args, |path, args| {
+        // CREATE_NO_WINDOW suppresses a console. The passive installer shows only its progress bar.
+        guild_uploader_core::background_command(path).args(args).spawn().map(|_| ())
+    })?;
     Ok(())
 }
 
@@ -218,6 +265,63 @@ mod tests {
     #[test]
     fn mac_message_names_the_version() {
         assert_eq!(mac_installed_message("Verified 0.1.3. The installer was started. This app was not restarted by the updater."), "Verified 0.1.3. The app was updated and is restarting.");
+    }
+
+    // R1: Windows Update now runs the verified installer as an in-place update: no pages, no
+    // uninstall of the old version, and the app starts again when it is done.
+    #[test]
+    fn r1_installer_runs_passive_in_update_mode_and_relaunches() {
+        assert_eq!(nsis_update_args(false), vec!["/P", "/UPDATE", "/R"]);
+        let args = nsis_update_args(false);
+        assert!(!args.iter().any(|a| a == "/S"), "silent mode hides a failed update");
+    }
+
+    // R2: the new version opens the way the old one was showing: hidden in the tray stays hidden.
+    #[test]
+    fn r2_relaunch_keeps_a_hidden_app_hidden() {
+        assert_eq!(nsis_update_args(true), vec!["/P", "/UPDATE", "/R", "/ARGS", "--hidden"]);
+    }
+
+    // R3: exactly the verified bytes are written as an .exe and started with those arguments.
+    #[test]
+    fn r3_writes_the_verified_bytes_and_starts_them_with_the_update_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"verified-installer-not-executed".to_vec();
+        let mut calls: Vec<(PathBuf, Vec<String>)> = Vec::new();
+        let path = launch_installer_in(dir.path(), &bytes, &nsis_update_args(false), |path, args| {
+            calls.push((path.to_path_buf(), args.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(path, dir.path().join(INSTALLER_FILE));
+        assert!(INSTALLER_FILE.ends_with(".exe"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(calls, vec![(path.clone(), nsis_update_args(false))]);
+    }
+
+    // R3: a failed start is reported, so the app stays open; an empty installer is never started.
+    #[test]
+    fn r3_a_failed_or_empty_launch_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let failed = launch_installer_in(dir.path(), b"x", &nsis_update_args(false), |_, _| {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "blocked"))
+        });
+        assert!(failed.unwrap_err().contains("blocked"));
+        let mut spawned = 0;
+        let empty = launch_installer_in(dir.path(), b"", &nsis_update_args(false), |_, _| {
+            spawned += 1;
+            Ok(())
+        });
+        assert!(empty.is_err());
+        assert_eq!(spawned, 0);
+        assert!(launch_verified_installer(&[], false).is_err());
+    }
+
+    // R5: the window says the app closes and comes back, not that an installer was started.
+    #[test]
+    fn r5_windows_message_says_the_app_closes_and_reopens() {
+        let verified = "Verified 0.2.0. The installer was started. This app was not restarted by the updater.";
+        assert_eq!(windows_updating_message(verified), "Verified 0.2.0. The app is closing to update and will reopen by itself.");
     }
 
     #[test]
@@ -395,6 +499,6 @@ mod tests {
         assert!(no_key.message.contains("no trusted update key"));
         assert_eq!(fetch_calls, 0);
         assert_eq!(install_calls, 0);
-        assert!(launch_verified_installer(&[]).is_err());
+        assert!(launch_verified_installer(&[], false).is_err());
     }
 }

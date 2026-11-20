@@ -40,13 +40,14 @@ Each task is one PR with **goal, read, deliver, acceptance**. Every task follows
 |---|---|---|
 | A10 | **Recipes on the WoW Forever client** (site P5.5; the owner, 2026-11-17: `Recipes.lua:29: attempt to call a nil value`, seen 14 times). Cause: that client (interface 16001) has `C_TradeSkillUI` only, no `GetTradeSkillLine` and the other old trade skill globals. Deliver: scan through `C_TradeSkillUI` when the old globals are absent; skip linked, guild and NPC windows; retry while the list loads; Classic Era unchanged; `run.py` cases for both APIs. Acceptance: the cases fail on `main` with the in-game error and pass after. | S |
 | A11 | **Guild bank on the WoW Forever client** (the owner, 2026-11-19: opening the guild bank prints nothing and `export` finds nothing, on a linked character). Cause: that client opens the bank with `PLAYER_INTERACTION_MANAGER_FRAME_SHOW` (`Enum.PlayerInteractionType.GuildBanker`); `GUILDBANKFRAME_OPENED`/`_CLOSED` are still known events but never fire. Deliver: capture on the interaction-manager events, keep the old ones where they exist, register only events the client knows; capture when a character is linked while the bank is open; `export` says why nothing is there. Acceptance: `run.py` cases fail on `main` and pass after. | S |
+| A12 | **One-click app update on Windows** (the owner, 2026-11-20: Update now opened the setup wizard, which uninstalled and reinstalled the app). Deliver: run the verified installer with the Tauri NSIS update flags (`/P /UPDATE /R`), exit the app so its files aren't locked, let the installer start the new version; wait for a running upload first; keep the SHA-256 and signature checks as they are; check in the Windows build that the generated installer reads those flags. Acceptance: unit tests for the arguments and the launch (no installer runs in CI); the owner's manual update from the previous version shows no installer pages. Automatic background updates: proposed in the PR, the owner decides. | S |
 
 ## Order
 ```
 A0.2 → A1.1 → A1.2
 A1.1 → A2 → (A2.1 ∥ A5 ∥ site P5.1)
 A1.1 → A3 → A4
-A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says;  A10, A11 any time
+A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says;  A10, A11, A12 any time
 ```
 Before Tuesday 13:00 (Claude Code only): A0.2, A1.1, A1.2, A2 are realistic.
 
