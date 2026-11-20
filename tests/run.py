@@ -32,7 +32,28 @@ GetAddOnMetadata = function() return "0.1.0" end
 printed = {}
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) printed[#printed+1] = m end }
 local frame = {} frame.__index = function() return function() end end
-CreateFrame = function() return setmetatable({ RegisterEvent = function() end, SetScript = function(self, k, f) self[k] = f end }, frame) end
+-- Frames remember the events they register; E2E_FIRE delivers an event to them the way the client does. Like the
+-- client, RegisterEvent raises an error for an event the client doesn't know (E2E_KNOWN_EVENTS, when set).
+local frames = {}
+CreateFrame = function()
+  local f = setmetatable({ events = {}, SetScript = function(self, k, fn) self[k] = fn end }, frame)
+  f.RegisterEvent = function(self, e)
+    if E2E_KNOWN_EVENTS and not E2E_KNOWN_EVENTS[e] then error('Attempt to register unknown event "' .. tostring(e) .. '"') end
+    self.events[e] = true
+  end
+  frames[#frames + 1] = f
+  return f
+end
+function E2E_FIRE(e, ...) for _, f in ipairs(frames) do if f.events[e] and f.OnEvent then f.OnEvent(f, e, ...) end end end
+function E2E_REGISTERED(e) for _, f in ipairs(frames) do if f.events[e] then return true end end return false end
+-- The events the addon may register that the WoW Forever client knows (wowless data/products/wowf/events.yaml,
+-- client 1.60.1.70888). CRAFT_SHOW is not one of them. GUILDBANKFRAME_OPENED/_CLOSED are known but never fire there:
+-- the guild bank opens through PLAYER_INTERACTION_MANAGER_FRAME_SHOW with Enum.PlayerInteractionType.GuildBanker.
+E2E_KNOWN_EVENTS = {}
+for _, e in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD", "PLAYER_GUILD_UPDATE", "GUILD_ROSTER_UPDATE",
+  "CHAT_MSG_ADDON", "TRADE_SKILL_SHOW", "GUILDBANKFRAME_OPENED", "GUILDBANKFRAME_CLOSED", "GUILDBANKBAGSLOTS_CHANGED",
+  "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" }) do E2E_KNOWN_EVENTS[e] = true end
+Enum = { PlayerInteractionType = { Merchant = 5, GuildBanker = 10 } }
 C_Timer = { After = function(_, f) end, NewTimer = function() return { Cancel = function() end } end, NewTicker = function() end }
 SlashCmdList = {}
 UISpecialFrames = {}
@@ -166,6 +187,92 @@ for label, mk, shim in [("luajit", LJ.LuaRuntime, False), ("lua51", L51.LuaRunti
             "true|nil|nothing saved", "true|nil|Alchemy 120 2329,2330"]
     for i, (got, exp) in enumerate(zip(rec, want), 1):
         assert got == exp, (label, "recipes R%d" % i, got, exp)
+    # Guild bank capture (Bank.lua). The WoW Forever client (interface 16001) opens the guild bank with
+    # PLAYER_INTERACTION_MANAGER_FRAME_SHOW(Enum.PlayerInteractionType.GuildBanker), not GUILDBANKFRAME_OPENED.
+    bank = lua.eval(r"""function(ns)
+      local GB, MERCHANT = Enum.PlayerInteractionType.GuildBanker, Enum.PlayerInteractionType.Merchant
+      local timers, queried, interacting = {}, {}, nil
+      C_Timer.After = function(d, f) timers[#timers + 1] = { f = f } end
+      C_Timer.NewTimer = function(d, f) local t = { f = f } t.Cancel = function() t.cancelled = true end timers[#timers + 1] = t return t end
+      local function drain() local i = 1 while timers[i] and i <= 50 do local t = timers[i] if not t.cancelled then t.f() end i = i + 1 end timers = {} end
+      local tabs = { { "Mats", true, { [1] = { 2771, 20 }, [5] = { 2771, 5 }, [9] = { 13444, 1 } } }, { "Officers", false, {} }, { "Gear", true, { [3] = { 19019, 1 } } } }
+      GetNumGuildBankTabs = function() return #tabs end
+      GetGuildBankTabInfo = function(t) return tabs[t][1], 133784, tabs[t][2] end
+      GetGuildBankItemInfo = function(t, s) local i = tabs[t][3][s] if i then return 100 + i[1], i[2] end end
+      GetGuildBankItemLink = function(t, s) local i = tabs[t][3][s] if i then return "|cffffffff|Hitem:" .. i[1] .. "::::::::60:::::|h[x]|h|r" end end
+      QueryGuildBankTab = function(t) queried[#queried + 1] = t end
+      GetGuildBankMoney = function() return 4200000 end
+      C_PlayerInteractionManager = { IsInteractingWithNpcOfType = function(ty) return interacting == ty end }
+      local secret = GuildaddonDB.chars[E2E_GUID]
+      local function reset() GuildaddonDB.outbox, queried, timers = {}, {}, {} for k in pairs(printed) do printed[k] = nil end end
+      local function captured()
+        local n = 0 for _, m in ipairs(printed) do if m:find("Guild bank captured", 1, true) then n = n + 1 end end return n
+      end
+      local function saved()
+        local e = GuildaddonDB.outbox.gbank
+        if not e then return "nothing saved" end
+        local ty, _, j = ns.decodeString(e.s)
+        local parts = {}
+        for _, t in ipairs(j.p.tabs) do
+          local items = {} for _, it in ipairs(t.items) do items[#items + 1] = it.itemId .. "x" .. it.count end
+          parts[#parts + 1] = t.tab .. ":" .. table.concat(items, ",")
+        end
+        return ty .. " " .. table.concat(parts, " ") .. " " .. tostring(j.p.copper)
+      end
+      local function open(ty) interacting = ty E2E_FIRE("PLAYER_INTERACTION_MANAGER_FRAME_SHOW", ty) end
+      local function close(ty) interacting = nil E2E_FIRE("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", ty) end
+      local function last() return printed[#printed] or "" end
+      local r = {}
+      local function check(name, fn) local ok, v = pcall(fn) r[#r + 1] = name .. "=" .. (ok and tostring(v) or ("error: " .. tostring(v))) end
+      -- R1: the Forever client opens the bank: viewable tabs are queried, a gbank string is saved, the capture is printed.
+      check("R1", function()
+        reset() open(GB) E2E_FIRE("GUILDBANKBAGSLOTS_CHANGED") drain() close(GB)
+        return saved() .. " queried=" .. table.concat(queried, ",") .. " printed=" .. captured()
+      end)
+      -- R2: another interaction window (a merchant) starts no capture.
+      check("R2", function() reset() open(MERCHANT) drain() close(MERCHANT) return saved() .. " queried=" .. #queried end)
+      -- R3: closing the bank before the capture settles captures straight away, once.
+      check("R3", function()
+        reset() open(GB) close(GB) local at = saved() drain() return at .. " printed=" .. captured()
+      end)
+      -- R4: older clients' GUILDBANKFRAME_OPENED/_CLOSED still capture, and a client that sends both kinds captures once.
+      check("R4", function()
+        reset() E2E_FIRE("GUILDBANKFRAME_OPENED") drain() E2E_FIRE("GUILDBANKFRAME_CLOSED") local a = saved() .. " printed=" .. captured()
+        reset() open(GB) E2E_FIRE("GUILDBANKFRAME_OPENED") drain() close(GB) E2E_FIRE("GUILDBANKFRAME_CLOSED")
+        return a .. " both=" .. captured()
+      end)
+      -- R5: events the client doesn't know are skipped without an error (CRAFT_SHOW on Forever).
+      check("R5", function()
+        local ok, res = pcall(ns.on, "E2E_NOT_AN_EVENT", function() end)
+        return tostring(ok) .. " " .. tostring(res) .. " " .. tostring(E2E_REGISTERED("CRAFT_SHOW")) .. " " .. tostring(ns.events.E2E_NOT_AN_EVENT)
+      end)
+      -- R6: the bank is open when the character gets linked: the capture runs then.
+      check("R6", function()
+        reset() GuildaddonDB.chars[E2E_GUID] = nil
+        open(GB) drain()
+        local before = saved()
+        local s = ns.encodeString("link-ok", 1, { char = { guid = E2E_GUID }, p = { secret = string.rep("11", 32) } }, nil)
+        ns.commands.import(s) drain()
+        local after = saved() close(GB)
+        return before .. " / " .. after
+      end)
+      -- R7: export with nothing saved says why: the bank is still being read; or the character isn't linked.
+      check("R7", function()
+        reset() open(GB) ns.commands.export("") local a = last() drain() close(GB)
+        reset() GuildaddonDB.chars[E2E_GUID] = nil ns.commands.export("") local b = last()
+        GuildaddonDB.chars[E2E_GUID] = secret
+        return tostring(a:find("guild bank is still being read", 1, true) ~= nil) .. " " .. tostring(b:find("isn't linked", 1, true) ~= nil)
+      end)
+      GuildaddonDB.chars[E2E_GUID] = secret
+      GuildaddonDB.outbox = {}
+      return table.concat(r, "\n")
+    end""")(ns).split("\n")
+    full = "gbank 1:2771x25,13444x1 3:19019x1 4200000"
+    want = ["R1=%s queried=1,3 printed=1" % full, "R2=nothing saved queried=0", "R3=%s printed=1" % full,
+            "R4=%s printed=1 both=1" % full, "R5=true false false nil", "R6=nothing saved / %s" % full, "R7=true true"]
+    for got, exp in zip(bank, want):
+        assert got == exp, (label, "gbank", got, exp)
+    assert len(bank) == len(want), (label, bank)
     out[label] = {"sha": h[0], "hmac": h[1], "gbank": gb, "recipes": rc, "ranks": rk, "roundtrip": list(rt)}
     print(label, h[0][:16], h[1][:16], len(gb), list(rt))
 for k, r in out.items():

@@ -39,13 +39,14 @@ Each task is one PR with **goal, read, deliver, acceptance**. Every task follows
 | ID | Task | Size |
 |---|---|---|
 | A10 | **Recipes on the WoW Forever client** (site P5.5; the owner, 2026-11-17: `Recipes.lua:29: attempt to call a nil value`, seen 14 times). Cause: that client (interface 16001) has `C_TradeSkillUI` only, no `GetTradeSkillLine` and the other old trade skill globals. Deliver: scan through `C_TradeSkillUI` when the old globals are absent; skip linked, guild and NPC windows; retry while the list loads; Classic Era unchanged; `run.py` cases for both APIs. Acceptance: the cases fail on `main` with the in-game error and pass after. | S |
+| A11 | **Guild bank on the WoW Forever client** (the owner, 2026-11-19: opening the guild bank prints nothing and `export` finds nothing, on a linked character). Cause: that client opens the bank with `PLAYER_INTERACTION_MANAGER_FRAME_SHOW` (`Enum.PlayerInteractionType.GuildBanker`); `GUILDBANKFRAME_OPENED`/`_CLOSED` are still known events but never fire. Deliver: capture on the interaction-manager events, keep the old ones where they exist, register only events the client knows; capture when a character is linked while the bank is open; `export` says why nothing is there. Acceptance: `run.py` cases fail on `main` and pass after. | S |
 
 ## Order
 ```
 A0.2 → A1.1 → A1.2
 A1.1 → A2 → (A2.1 ∥ A5 ∥ site P5.1)
 A1.1 → A3 → A4
-A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says;  A10 any time
+A1.1 → A6;  A1.1 → A7;  A8 any time;  A9 when the owner says;  A10, A11 any time
 ```
 Before Tuesday 13:00 (Claude Code only): A0.2, A1.1, A1.2, A2 are realistic.
 
