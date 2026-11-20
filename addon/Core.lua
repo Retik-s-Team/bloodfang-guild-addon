@@ -22,14 +22,14 @@ function ns.me()
   return { guid = UnitGUID("player"), name = name, realm = (realm and realm ~= "") and realm or GetRealmName() }
 end
 function ns.secret() local c = db().chars[UnitGUID("player")] return c and c.secret end
+function ns.notLinked()
+  ns.print("This character isn't linked yet. Get a code on the site's Link page, then type " .. ns.cmd .. " link <code>.")
+end
 
 -- Envelope per contract/SPEC.md. Returns the string, or nil when this character isn't linked.
 function ns.export(ty, p)
   local secret = ns.secret()
-  if not secret then
-    ns.print("This character isn't linked yet. Get a code on the site's Link page, then type " .. ns.cmd .. " link <code>.")
-    return nil
-  end
+  if not secret then ns.notLinked() return nil end
   local env = { id = ns.randomHex(16), t = GetServerTime(), addon = ns.version, char = ns.me(), p = p }
   -- Guild rank names (Guild.lua) ride on every other export, inside the signed envelope.
   if ty ~= "ranks" and ns.guildBlock then env.guild = ns.guildBlock() end
@@ -101,6 +101,7 @@ local function import(text)
     if type(s) ~= "string" or not s:match("^%x+$") or #s ~= 64 then ns.print("That link string is damaged.") return end
     db().chars[j.char.guid] = { secret = s:lower(), linkedAt = GetServerTime() }
     ns.print("Linked. This character can now send signed exports.")
+    for _, fn in ipairs(ns.afterLink) do fn() end
   else
     ns.print("Imports of type " .. ty .. " aren't supported by this version yet.")
   end
@@ -109,13 +110,21 @@ end
 -- ---------- slash commands ----------
 ns.commands = {}
 ns.ready = {}
+ns.afterLink = {} -- run after a successful link, e.g. to capture a guild bank window that is already open
 ns.commands.link = link
 ns.commands.import = function(arg) if arg ~= "" then import(arg) else ns.showPaste("Paste the string from the site", import) end end
 ns.commands.export = function(arg)
   local list = {}
   -- `ranks` strings go up with the uploader only; the site has no paste box for them.
   for key, e in pairs(db().outbox) do if key ~= "ranks" and (arg == "" or key:find(arg, 1, true) == 1) then list[#list + 1] = e.s end end
-  if #list == 0 then ns.print("Nothing to export yet. Open the guild bank or a profession window first.") return end
+  if #list == 0 then
+    local bank = ns.bankState and (arg == "" or ("gbank"):find(arg, 1, true) == 1) and ns.bankState()
+    if not ns.secret() then ns.notLinked()
+    elseif bank == "reading" then ns.print("The guild bank is still being read. Try again in a few seconds.")
+    elseif bank == "open" then ns.print("The guild bank wasn't captured. Close it and open it again.")
+    else ns.print("Nothing to export yet. Open the guild bank or a profession window first.") end
+    return
+  end
   ns.showCopy("Copy and paste on the site (Bank or Crafting page)", table.concat(list, "\n"))
 end
 ns.commands.help = function()
@@ -135,7 +144,14 @@ end
 -- ---------- startup ----------
 local ev = CreateFrame("Frame")
 ns.events = {}
-function ns.on(event, fn) ns.events[event] = ns.events[event] or {} table.insert(ns.events[event], fn) ev:RegisterEvent(event) end
+-- Listens for an event if this client knows it (RegisterEvent raises an error for one it doesn't, e.g. CRAFT_SHOW on
+-- the WoW Forever client). Returns whether it registered.
+function ns.on(event, fn)
+  if not pcall(ev.RegisterEvent, ev, event) then return false end
+  ns.events[event] = ns.events[event] or {}
+  table.insert(ns.events[event], fn)
+  return true
+end
 ev:SetScript("OnEvent", function(_, event, ...) for _, fn in ipairs(ns.events[event]) do fn(...) end end)
 ns.on("ADDON_LOADED", function(name)
   if name ~= ADDON then return end
