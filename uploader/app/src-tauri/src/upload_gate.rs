@@ -245,6 +245,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::time::Duration;
 
     fn prefs_with_success() -> Prefs {
         Prefs {
@@ -346,6 +347,38 @@ mod tests {
         assert!(flight.take_repeat());
         assert!(!flight.take_repeat());
         assert!(flight.acquire());
+    }
+
+    // R4: an app update waits for a running upload and keeps new ones from starting until the app exits.
+    #[test]
+    fn r4_update_waits_for_a_running_upload_and_holds_off_new_ones() {
+        let flight = Flight::default();
+        assert!(flight.acquire());
+        // Busy: no hold, and waiting for it must not queue an extra upload.
+        assert!(!flight.hold());
+        assert!(!wait_for_hold(&flight, Duration::from_millis(30), Duration::from_millis(5)));
+        assert!(!flight.take_repeat(), "a refused hold queued an upload");
+        // Idle: the update holds the flight; a trigger meanwhile waits instead of starting.
+        assert!(wait_for_hold(&flight, Duration::from_millis(30), Duration::from_millis(5)));
+        assert!(!flight.acquire());
+        // The update didn't start: releasing says a trigger arrived, and uploads run again.
+        assert!(flight.release());
+        assert!(flight.acquire());
+        assert!(!flight.take_repeat());
+        assert!(flight.hold());
+        assert!(!flight.release());
+    }
+
+    #[test]
+    fn r4_hold_succeeds_once_the_running_upload_finishes() {
+        let flight = Arc::new(Flight::default());
+        assert!(flight.acquire());
+        let waiter = Arc::clone(&flight);
+        let held = thread::spawn(move || wait_for_hold(&waiter, Duration::from_secs(5), Duration::from_millis(5)));
+        thread::sleep(Duration::from_millis(30));
+        assert!(!flight.take_repeat());
+        assert!(held.join().unwrap());
+        assert!(!flight.acquire());
     }
 
     #[test]

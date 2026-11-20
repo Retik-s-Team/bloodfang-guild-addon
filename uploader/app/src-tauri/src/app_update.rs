@@ -220,6 +220,63 @@ mod tests {
         assert_eq!(mac_installed_message("Verified 0.1.3. The installer was started. This app was not restarted by the updater."), "Verified 0.1.3. The app was updated and is restarting.");
     }
 
+    // R1: Windows Update now runs the verified installer as an in-place update: no pages, no
+    // uninstall of the old version, and the app starts again when it is done.
+    #[test]
+    fn r1_installer_runs_passive_in_update_mode_and_relaunches() {
+        assert_eq!(nsis_update_args(false), vec!["/P", "/UPDATE", "/R"]);
+        let args = nsis_update_args(false);
+        assert!(!args.iter().any(|a| a == "/S"), "silent mode hides a failed update");
+    }
+
+    // R2: the new version opens the way the old one was showing: hidden in the tray stays hidden.
+    #[test]
+    fn r2_relaunch_keeps_a_hidden_app_hidden() {
+        assert_eq!(nsis_update_args(true), vec!["/P", "/UPDATE", "/R", "/ARGS", "--hidden"]);
+    }
+
+    // R3: exactly the verified bytes are written as an .exe and started with those arguments.
+    #[test]
+    fn r3_writes_the_verified_bytes_and_starts_them_with_the_update_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = b"verified-installer-not-executed".to_vec();
+        let mut calls: Vec<(PathBuf, Vec<String>)> = Vec::new();
+        let path = launch_installer_in(dir.path(), &bytes, &nsis_update_args(false), |path, args| {
+            calls.push((path.to_path_buf(), args.to_vec()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(path, dir.path().join(INSTALLER_FILE));
+        assert!(INSTALLER_FILE.ends_with(".exe"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(calls, vec![(path.clone(), nsis_update_args(false))]);
+    }
+
+    // R3: a failed start is reported, so the app stays open; an empty installer is never started.
+    #[test]
+    fn r3_a_failed_or_empty_launch_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let failed = launch_installer_in(dir.path(), b"x", &nsis_update_args(false), |_, _| {
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "blocked"))
+        });
+        assert!(failed.unwrap_err().contains("blocked"));
+        let mut spawned = 0;
+        let empty = launch_installer_in(dir.path(), b"", &nsis_update_args(false), |_, _| {
+            spawned += 1;
+            Ok(())
+        });
+        assert!(empty.is_err());
+        assert_eq!(spawned, 0);
+        assert!(launch_verified_installer(&[], false).is_err());
+    }
+
+    // R5: the window says the app closes and comes back, not that an installer was started.
+    #[test]
+    fn r5_windows_message_says_the_app_closes_and_reopens() {
+        let verified = "Verified 0.2.0. The installer was started. This app was not restarted by the updater.";
+        assert_eq!(windows_updating_message(verified), "Verified 0.2.0. The app is closing to update and will reopen by itself.");
+    }
+
     #[test]
     fn later_hides_that_version_and_a_newer_one_asks_again() {
         assert!(should_offer("0.1.0", Some("0.2.0"), None));
@@ -395,6 +452,6 @@ mod tests {
         assert!(no_key.message.contains("no trusted update key"));
         assert_eq!(fetch_calls, 0);
         assert_eq!(install_calls, 0);
-        assert!(launch_verified_installer(&[]).is_err());
+        assert!(launch_verified_installer(&[], false).is_err());
     }
 }
