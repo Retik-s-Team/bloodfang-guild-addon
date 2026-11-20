@@ -3,6 +3,14 @@
 The release version comes from the `addon-v<version>` tag (see `.github/workflows/addon-release.yml`); nothing in the
 source carries it. Pushing the tag publishes the release.
 
+## Unreleased
+- Guild bank capture works on the WoW Forever client (interface 16001). That client announces the bank window with
+  `PLAYER_INTERACTION_MANAGER_FRAME_SHOW` / `_HIDE` (the GuildBanker type) and never fires `GUILDBANKFRAME_OPENED`,
+  so nothing was captured. Both kinds are handled now, one capture per visit.
+- Events a client doesn't know are skipped instead of raising an error.
+- Linking a character while the guild bank is open captures it straight away. `export` with nothing saved says why:
+  the character isn't linked, or the bank is still being read, or it should be reopened.
+
 ## 0.2.1 (unreleased)
 - Slash commands come from the build config: the short command (`ADDON_SLASH`) and the addon name in lower case are both
   registered, generated into `Config.lua` at package time. `/bf` is no longer registered. Help text and every printed

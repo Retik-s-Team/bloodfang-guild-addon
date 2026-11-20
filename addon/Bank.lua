@@ -1,9 +1,11 @@
 -- Guild bank capture (SPEC §13, contract/SPEC.md `gbank`): every viewable tab's item IDs and counts, each
--- item's icon as the game reports it, and guild bank gold. Runs when the guild bank window opens.
+-- item's icon as the game reports it, and guild bank gold. Runs when the guild bank window opens: newer clients (WoW
+-- Forever, interface 16001) say so with PLAYER_INTERACTION_MANAGER_FRAME_SHOW and the GuildBanker type, older ones with
+-- GUILDBANKFRAME_OPENED. Forever still knows GUILDBANKFRAME_OPENED but never fires it.
 local _, ns = ...
 local MAX_TABS = 8
 local SLOTS = 98
-local pending, scanned, timer
+local pending, isOpen, timer
 
 -- Pure part, testable outside the game: raw slots -> payload.
 -- tabs = { { tab = n, name = "...", slots = { { link = "|Hitem:123:...|h", count = 5, texture = 1234 }, ... } } }
@@ -31,7 +33,8 @@ function ns.bankPayload(tabs, copper, iconFor)
 end
 
 local function iconFor(id)
-  local icon = GetItemInfoInstant and select(5, GetItemInfoInstant(id))
+  local info = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+  local icon = info and select(5, info(id))
   return icon
 end
 
@@ -49,7 +52,7 @@ local function finish()
       tabs[#tabs + 1] = { tab = tab, name = name, slots = slots }
     end
   end
-  if #tabs == 0 then return end
+  if #tabs == 0 then ns.print("No guild bank tabs you can view were found.") return end
   local money = GetGuildBankMoney and GetGuildBankMoney()
   local s = ns.export("gbank", ns.bankPayload(tabs, money, iconFor))
   if s then
@@ -65,8 +68,8 @@ local function settle()
   if timer then timer:Cancel() end
   timer = C_Timer.NewTimer(1.5, function() timer = nil if pending then pending = false finish() end end)
 end
-ns.on("GUILDBANKFRAME_OPENED", function()
-  pending, scanned = true, {}
+local function start()
+  pending = true
   for tab = 1, math.min(GetNumGuildBankTabs(), MAX_TABS) do
     local _, _, viewable = GetGuildBankTabInfo(tab)
     if viewable then
@@ -74,6 +77,39 @@ ns.on("GUILDBANKFRAME_OPENED", function()
     end
   end
   settle()
-end)
+end
+
+-- A client that sends both kinds of event still captures once per visit.
+local function opened() if not isOpen then isOpen = true start() end end
+local function closed()
+  if not isOpen then return end
+  isOpen = false
+  if pending then pending = false if timer then timer:Cancel() timer = nil end finish() end
+end
+local function isGuildBanker(ty)
+  return ty ~= nil and Enum and Enum.PlayerInteractionType and ty == Enum.PlayerInteractionType.GuildBanker
+end
+
+-- nil when the guild bank window is closed, "reading" while a capture runs, "open" otherwise.
+function ns.bankState()
+  local gb = Enum and Enum.PlayerInteractionType and Enum.PlayerInteractionType.GuildBanker
+  local pim = C_PlayerInteractionManager
+  local open = isOpen or (gb and pim and pim.IsInteractingWithNpcOfType and pim.IsInteractingWithNpcOfType(gb))
+  if not open then return nil end
+  return pending and "reading" or "open"
+end
+
+ns.on("GUILDBANKFRAME_OPENED", opened)
+ns.on("GUILDBANKFRAME_CLOSED", closed)
+ns.on("PLAYER_INTERACTION_MANAGER_FRAME_SHOW", function(ty) if isGuildBanker(ty) then opened() end end)
+ns.on("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", function(ty) if isGuildBanker(ty) then closed() end end)
 ns.on("GUILDBANKBAGSLOTS_CHANGED", function() if pending then settle() end end)
-ns.on("GUILDBANKFRAME_CLOSED", function() if pending then pending = false if timer then timer:Cancel() timer = nil end finish() end end)
+
+-- Linked while the bank window is open: capture it now rather than wait for the next visit.
+table.insert(ns.afterLink, function()
+  if ns.bankState() and not pending then
+    ns.print("The guild bank is open; reading it now.")
+    isOpen = true
+    start()
+  end
+end)

@@ -82,4 +82,4 @@ local function scanCraft()
 end
 -- The list fills in a moment after the window opens.
 ns.on("TRADE_SKILL_SHOW", function() C_Timer.After(1, scanTrade) end)
-pcall(ns.on, "CRAFT_SHOW", function() C_Timer.After(1, scanCraft) end)
+ns.on("CRAFT_SHOW", function() C_Timer.After(1, scanCraft) end)
