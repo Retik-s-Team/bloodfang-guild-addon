@@ -3,7 +3,7 @@
 The release version comes from the `addon-v<version>` tag (see `.github/workflows/addon-release.yml`); nothing in the
 source carries it. Pushing the tag publishes the release.
 
-## Unreleased
+## 0.2.3 (Nov 21, 2026)
 - Linking takes two steps instead of three (link v2, `contract/SPEC.md` §3.3). With the long 26-character code the site
   will show, `<cmd> link <code>` derives the character's signing secret from the code (HKDF-SHA256, bound to the
   character) and shows a `!BF:link:v2:` string signed with it. Pasting that on the site finishes the link; there is no
@@ -14,7 +14,7 @@ source carries it. Pushing the tag publishes the release.
 - Linking again with a new code replaces the character's secret at once. If that string is never pasted on the site,
   the character's uploads are refused until it is linked again; the addon says so when it relinks a linked character.
 
-## 0.2.2 (unreleased)
+## 0.2.2 (Nov 20, 2026)
 - Recipes save from the profession window on the WoW Forever client (interface 16001). That client has no
   `GetTradeSkill*` / `GetCraft*` globals, so opening a profession window raised an error and saved nothing. The
   recipe list is now read through `C_TradeSkillUI` (learned recipes only, retried while the list is still loading);
@@ -56,7 +56,7 @@ the release file names come from the `uploader-app-v<version>` tag (`.github/wor
 Nothing checks that they match, so bump them together. The tag builds a draft release, which is signed with
 `scripts/uploader-sign-release.sh` and then published.
 
-## 0.1.5 (unreleased)
+## 0.1.5 (Nov 20, 2026)
 - Update now on Windows is one click: the verified installer runs in update mode with only a progress bar, keeps the
   installed app's shortcuts, start-at-login setting, settings and sign-in, and reopens the app when it is done (hidden
   in the tray if it was hidden). It no longer offers to uninstall the old version or walks through the setup pages.
