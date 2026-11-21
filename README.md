@@ -9,7 +9,7 @@ A guild addon and optional uploader for WoW: Forever. Open source so anyone can 
 ## Install the addon
 1. Download the zip from Releases and check it: `sha256sum -c <zip>.sha256` and `gh attestation verify <zip> --repo <owner>/<repo>`.
 2. Unzip into `World of Warcraft/<client>/Interface/AddOns/`. You should get one addon folder.
-3. In game: get a code from the site's Link page, type `<cmd> link <code>`, copy the string into the site, paste the string the site gives back with `<cmd> import`.
+3. In game: copy the `<cmd> link <code>` command from the site's Link page into the chat box, then paste the string the addon shows into the site. With the short 8-character code an older site gives, also paste the string the site gives back with `<cmd> import`.
 4. Open the guild bank or a profession window. Then `/reload` (or log out) so the game writes the file, and either run the uploader or copy with `<cmd> export` and paste on the site.
 
 Commands: `<cmd> link <code>`, `<cmd> import`, `<cmd> export [gbank|recipes]`, `<cmd> ranks`, `<cmd> location on|off`, `<cmd> where`, `<cmd> version`.

@@ -1,6 +1,7 @@
 # Wire-format contract: addon, uploader, site
 
-Status: describes the code as it is today. It is not a redesign.
+Status: describes the code as it is today. It is not a redesign. Exception: `link` v2 (section 3.3) is produced by the
+addon in this repo; the site accepts it only after its own follow-up change (section 3.3.7).
 This file replaces `export-format.md`, which many files cite but which never existed (see Gap 1).
 
 Path notation:
@@ -40,7 +41,7 @@ Three parts:
 Paths into the site:
 - Uploader: `gbank`, `recipes`, `ranks` strings via `/api/uploader/ingest` (`uploader/core/src/lib.rs:29`, `site:src/app/api/uploader/ingest/route.ts:13`).
 - Paste forms: `link` (`site:src/app/settings/link/actions.ts:51`), `gbank` (`site:src/app/bank/actions.ts:77`), `signup`, `attendance`, `kills` (`site:src/app/calendar/actions.ts:36,164-165`).
-- Site to addon: `link-ok` (`site:src/app/settings/link/actions.ts:90`) and `signups` (`site:src/app/calendar/[id]/page.tsx:59`), pasted with `/cmd import` (`addon/Core.lua:94-107`).
+- Site to addon: `link-ok` (`site:src/app/settings/link/actions.ts:90`, link v1 only; link v2 has no import, section 3.3) and `signups` (`site:src/app/calendar/[id]/page.tsx:59`), pasted with `/cmd import` (`addon/Core.lua:136-150`).
 
 In-game addon messages are not sent to the site. Prefix: addon folder name, upper case, 16 chars max (`addon/Core.lua:5`). Messages: `VER:<x.y.z>` (`addon/Comms.lua:24`), `VREQ` (`addon/Comms.lua:54,68`), `LOC:<zone>:<subzone>:<x>:<y>` with x and y in 0..1000 (`addon/Comms.lua:46`).
 
@@ -55,7 +56,7 @@ In-game addon messages are not sent to the site. Prefix: addon folder name, uppe
 | Part | Rule | Evidence |
 |---|---|---|
 | `<type>` | `[a-z-]+` | `addon/Codec.lua:179`, `site:src/lib/addon-codec.ts:51` |
-| `<n>` | decimal integer. Every producer writes `1` today. | `addon/Core.lua:36,89`, `site:src/lib/addon-codec.ts:76` |
+| `<n>` | decimal integer. Every producer writes `1` today. | `addon/Core.lua:36,93`, `site:src/lib/addon-codec.ts:76` |
 | `<body>` | LibDeflate `EncodeForPrint` of raw deflate (no zlib header) of the JSON envelope | `addon/Codec.lua:176`, `site:src/lib/addon-codec.ts:59,76` |
 | Whitespace | Leading/trailing whitespace is trimmed before parsing | `addon/Codec.lua:179`, `site:src/lib/addon-codec.ts:49`, `uploader/core/src/envelope.rs:16` |
 
@@ -97,9 +98,10 @@ Two schemes. Neither covers the `!BF:` prefix; both cover only JSON.
 
 | Direction | Algorithm | Key | Signed bytes | Field | Verified by |
 |---|---|---|---|---|---|
-| Addon to site (all types except `link`) | HMAC-SHA256 | per-character 32-byte secret. Issued at link time, sent to the addon as 64 hex in `link-ok`, stored as `chars[guid].secret` (`addon/Core.lua:102`). Site stores it AES-256-GCM sealed (`site:src/lib/addon-codec.ts:105-122`). | UTF-8 canonical JSON of the envelope without `sig` (`addon/Codec.lua:174`) | `sig` at top level of the envelope | site: `site:src/lib/ingest.ts:36-39` (constant-time compare) |
-| `link` | none | - | - | no `sig` | site trusts the one-time link code (`site:src/app/settings/link/actions.ts:65-68`) |
-| Site to addon (`link-ok`, `signups`) | Ed25519 | site key `ADDON_SIGNING_KEY`, base64 PKCS#8 DER (`site:src/lib/addon-codec.ts:83-84`) | UTF-8 canonical JSON of `{id, t, char:{guid}, p}` (`site:src/lib/addon-codec.ts:99-100`) | `sig`, 128 hex, top level | nobody yet: the addon does not check it (`addon/Core.lua:92-93`) |
+| Addon to site (all types except `link`) | HMAC-SHA256 | per-character 32-byte secret. Issued at link time, sent to the addon as 64 hex in `link-ok`, stored as `chars[guid].secret` (`addon/Core.lua:144`). Site stores it AES-256-GCM sealed (`site:src/lib/addon-codec.ts:105-122`). | UTF-8 canonical JSON of the envelope without `sig` (`addon/Codec.lua:174`) | `sig` at top level of the envelope | site: `site:src/lib/ingest.ts:36-39` (constant-time compare) |
+| `link` v1 | none | - | - | no `sig` | site trusts the one-time link code (`site:src/app/settings/link/actions.ts:65-68`) |
+| `link` v2 | HMAC-SHA256 | the per-character secret derived from the link code (section 3.3.2) | as for the other types | `sig` | site, after re-deriving the secret from its stored code (section 3.3.4) |
+| Site to addon (`link-ok`, `signups`) | Ed25519 | site key `ADDON_SIGNING_KEY`, base64 PKCS#8 DER (`site:src/lib/addon-codec.ts:83-84`) | UTF-8 canonical JSON of `{id, t, char:{guid}, p}` (`site:src/lib/addon-codec.ts:99-100`) | `sig`, 128 hex, top level | nobody yet: the addon does not check it (`addon/Core.lua:134-135`) |
 
 The HMAC key is the raw 32 bytes (`ns.fromHex(secretHex)`, `addon/Codec.lua:174`; `openSecret()`, `site:src/lib/ingest.ts:37`). HMAC uses a 64-byte block (`addon/Codec.lua:157-163`).
 
@@ -126,25 +128,26 @@ The site does not verify the received bytes. It parses the JSON, removes `sig`, 
 
 | Type | Ver | Direction | Producer | Consumer(s) | Site accepts | Notes |
 |---|---|---|---|---|---|---|
-| `link` | 1 | addon to site (paste) | `addon/Core.lua:83-90` | `site:src/app/settings/link/actions.ts:51` | `{link:[1]}` | unsigned |
-| `link-ok` | 1 | site to addon (paste) | `site:src/app/settings/link/actions.ts:90` | `addon/Core.lua:99-103` | - | Ed25519, unchecked |
+| `link` | 1 | addon to site (paste) | `addon/Core.lua` `linkV1` | `site:src/app/settings/link/actions.ts:51` | `{link:[1]}` | unsigned; 8-char code |
+| `link` | 2 | addon to site (paste) | `addon/Core.lua` `linkV2` | site follow-up (3.3.7) | not yet | HMAC with the derived secret; no `link-ok` (3.3) |
+| `link-ok` | 1 | site to addon (paste) | `site:src/app/settings/link/actions.ts:90` | `addon/Core.lua:141-145` | - | Ed25519, unchecked |
 | `gbank` | 1 | addon to site (uploader or paste) | `addon/Bank.lua:54` | `site:src/lib/uploader.ts:37-51` | `{gbank:[1]}` (`site:src/lib/ingest.ts:29`) | officer roles |
 | `recipes` | 1 | addon to site (uploader only) | `addon/Recipes.lua:21` | `site:src/lib/uploader.ts:54-69` | `{recipes:[1]}` | no paste form exists |
 | `ranks` | 1 | addon to site (uploader only) | `addon/Guild.lua:72` | `site:src/lib/uploader.ts:77-86` | `{ranks:[1]}` | refused unless source is UPLOADER |
 | `signup` | 1 | addon to site (paste) | **none in addon** | `site:src/app/calendar/actions.ts:31-47` | `{signup:[1]}` | accepted, never produced |
 | `attendance` | 1 | addon to site (paste) | **none in addon** | `site:src/app/calendar/actions.ts:158-182`, `site:src/lib/raids.ts:67` | `{attendance:[1]}` | accepted, never produced |
 | `kills` | 1 | addon to site (paste) | **none in addon** | `site:src/app/calendar/actions.ts:158-182`, `site:src/lib/raids.ts:105` | `{kills:[1]}` | accepted, never produced |
-| `signups` | 1 | site to addon (paste) | `site:src/app/calendar/[id]/page.tsx:59-62` | **addon rejects** (`addon/Core.lua:105`) | - | produced, never consumed |
+| `signups` | 1 | site to addon (paste) | `site:src/app/calendar/[id]/page.tsx:59-62` | **addon rejects** (`addon/Core.lua:148`) | - | produced, never consumed |
 
 There is no per-type accepted-versions map. Each caller passes `{[type]: [1]}`: `site:src/lib/ingest.ts:29` (all signed types) and `site:src/app/settings/link/actions.ts:51` (`link`). The uploader's extractor also hard-codes `v1` (`uploader/core/src/lib.rs:34`).
 
 ### 3.2 Payloads (`p`)
 
-`link` (`addon/Core.lua:88`). Envelope has `id, t, addon, char{guid,name,realm}, p`, no `sig`, no `guild`.
+`link` (`addon/Core.lua:92`). Envelope has `id, t, addon, char{guid,name,realm}, p`, no `sig`, no `guild`.
 
 | Field | Type | Site rule |
 |---|---|---|
-| `code` | string, 8 chars `[A-Z0-9]` (`addon/Core.lua:85`) | upper-cased, must be the user's live code (`site:src/app/settings/link/actions.ts:58,65-68`) |
+| `code` | string, 8 chars `[A-Z0-9]` (`addon/Core.lua:128`) | upper-cased, must be the user's live code (`site:src/app/settings/link/actions.ts:58,65-68`) |
 | `class` | string, class file name e.g. `MAGE` | must be a playable class, else `unsupported_version` message (`:61`) |
 | `race` | string | first 20 chars (`:63`) |
 | `level` | integer | 1..60, else null (`:62`) |
@@ -152,12 +155,23 @@ There is no per-type accepted-versions map. Each caller passes `{[type]: [1]}`: 
 | `char.name` | string | `^\p{L}{2,12}$` (`:43,60`) |
 | `char.surname` or `char.realm` | string | surname falls back to `realm`; addon sends `realm` (`:56`) |
 
-`link-ok` (`site:src/app/settings/link/actions.ts:90`). Envelope `{id, t, char:{guid}, p, sig}`.
+`link` v2 (`addon/Core.lua` `linkV2`). Envelope has `id, t, addon, char{guid,name,realm}, p, sig`, no `guild`. Rules: 3.3.
+
+| Field | Type | Site rule |
+|---|---|---|
+| `lookup` | string, 32 lower hex | finds the link code: `lookup` of the stored code (3.3.2); must be the user's live code |
+| `n` | string, 32 lower hex | addon nonce, input to the secret (3.3.2) |
+| `class`, `race`, `level`, `char.*` | as `link` v1 | as `link` v1 |
+| `sig` (envelope) | string, 64 lower hex | HMAC-SHA256 with the derived secret over the canonical envelope without `sig` (2.5) |
+
+There is no `code` field: the code itself and the secret never appear in the string.
+
+`link-ok` (`site:src/app/settings/link/actions.ts:90`). Envelope `{id, t, char:{guid}, p, sig}`. Link v1 only.
 
 | Field | Type | Addon rule |
 |---|---|---|
-| `guid` | string | not read; `char.guid` must equal the player GUID (`addon/Core.lua:98`) |
-| `secret` | string, 64 hex | must be 64 hex, stored lower case (`addon/Core.lua:101-102`) |
+| `guid` | string | not read; `char.guid` must equal the player GUID (`addon/Core.lua:140`) |
+| `secret` | string, 64 hex | must be 64 hex, stored lower case (`addon/Core.lua:143-144`) |
 
 `gbank` (`addon/Bank.lua:10-31`).
 
@@ -195,6 +209,150 @@ There is no per-type accepted-versions map. Each caller passes `{[type]: [1]}`: 
 `kills` (site reader only, `site:src/lib/raids.ts:105-121`): `instanceId`, `kills[]` `{encounterId, start, end, success}`, first 50 used.
 
 `signups` (`site:src/app/calendar/[id]/page.tsx:59-62`): `eventId, instanceId, startsAt, raidGroup, roster[] {name, class, role, status, confirmed, party:null, slot:null}`.
+
+### 3.3 Linking a character: v1 and v2
+
+#### 3.3.1 Flows
+
+| | v1 (three hand-offs) | v2 (two hand-offs) |
+|---|---|---|
+| 1 | Site shows an 8-character code. | Site shows the whole command `/<cmd> link <26-character code>` with a copy button. |
+| 2 | `/<cmd> link <code>` in game shows `!BF:link:v1:` (carries the code). | Same command. The addon derives the character's secret from the code (3.3.2), keeps it (3.3.3) and shows `!BF:link:v2:` (carries a lookup id, never the code or the secret), signed with that secret. |
+| 3 | Pasted on the site. The site checks the code, makes a random 32-byte secret, answers with `!BF:link-ok:v1:` carrying it. | Pasted on the site. The site finds the code by its lookup id, re-derives the secret, checks the signature, saves the character and seals the secret. Nothing comes back. |
+| 4 | `/<cmd> import` in game stores the secret. | (gone) |
+
+The addon picks the flow from the code's length after normalization (3.3.2): 8 characters is v1 (unchanged), 26 is v2,
+anything else prints the usage line.
+
+#### 3.3.2 Code, key derivation and signature (normative)
+
+**Code.** 26 characters, each chosen uniformly with a CSPRNG (`crypto.randomInt(32)`) from Crockford base32
+`0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no `I`, `L`, `O`, `U`): 130 bits. Like v1 it is single use, expires after 10 minutes,
+belongs to the user who asked for it, replaces that user's other unused codes, and is rate limited (10 codes and
+20 pastes per user per hour).
+
+**Normalization** (the addon, before anything else; the site only ever handles codes it generated):
+1. Remove ASCII whitespace (TAB, LF, VT, FF, CR, space) and `-`.
+2. If anything other than ASCII `0-9`, `A-Z`, `a-z` remains, the code is invalid. (Exactly 8 characters here: a v1 code, v1 rules.)
+3. Upper-case (ASCII only), then map `O` to `0`, and `I` and `L` to `1`.
+4. The result is a v2 code only if it is exactly 26 characters of the alphabet (`U` stays invalid).
+
+**Derivation.** HKDF-SHA256 (RFC 5869). Every string is ASCII bytes; `||` is concatenation.
+
+```
+salt   = "BF-LINK-V2"                                          (10 bytes)
+PRK    = HMAC-SHA256(key = salt, msg = code)                   HKDF-Extract
+lookup = HKDF-Expand(PRK, info = "lookup", L = 16)
+       = first 16 bytes of HMAC-SHA256(PRK, "lookup" || 0x01)  sent as 32 lower-case hex
+secret = HKDF-Expand(PRK, info = "secret:" || guid || ":" || n, L = 32)
+       = HMAC-SHA256(PRK, "secret:" || guid || ":" || n || 0x01)
+```
+
+- `code` is the normalized 26-character code. `guid` is `char.guid` exactly as in the envelope (`Player-4395-0ABCDEF1`).
+  `n` is `p.n`: 32 lower-case hex characters (16 bytes) the addon picks (3.3.3).
+- Node: `hkdfSync("sha256", code, "BF-LINK-V2", "lookup", 16)` and
+  `hkdfSync("sha256", code, "BF-LINK-V2", "secret:" + guid + ":" + n, 32)` (each returns an `ArrayBuffer`).
+- Lua: `ns.hkdf(salt, ikm, info, len)` in `addon/Codec.lua`, built on the existing `ns.hmac`.
+- `lookup` depends on the code only, so the site can compute and index it when it issues the code.
+- The secret is then an ordinary per-character secret: the raw 32 bytes are the HMAC key (2.5), the addon stores it as
+  64 lower-case hex in `chars[guid].secret`, the site seals it.
+
+**Signature.** The `link` v2 envelope carries `sig` = HMAC-SHA256(secret, canonical JSON of the envelope without `sig`),
+the same rule as every other signed export (2.5, 2.6). It proves that whoever made the string knew the code and covers
+every field (guid, class, lookup, `n`).
+
+**Vectors.** `contract/golden/strings/link-kdf.v2.json` (inputs, normalization cases, `PRK`, `lookup`, `secret`, the signed
+text and `sig`), `contract/golden/strings/link.v2.txt` and `.json` (the string the addon shows for the test code), and
+`contract/golden/strings/bad/link-v2-bad-sig.txt` (a changed field under the old `sig`: refused).
+
+#### 3.3.3 Addon state: the newest link wins
+
+The site sends nothing back in v2, so the addon cannot know whether a paste worked. There is no separate pending slot:
+
+1. `/<cmd> link <v2 code>` makes the derived secret the character's active secret at once:
+   `chars[guid] = { secret, linkedAt, lookup, n }`. Exports from then on are signed with it, and the after-link hooks run
+   (for example, an open guild bank is captured).
+2. `n` is new (`ns.randomHex(16)`) unless the stored record already has the same `lookup`: running the same code again on
+   the same character reuses `n`, so every string made from one code carries the same secret and pasting any of them works.
+3. Any later link replaces the record: another v2 code, or a v1 `link-ok` import (v1 rule, unchanged). A failed or
+   abandoned link therefore never gets in the way of a later one.
+4. `/<cmd> link <8-character code>` changes nothing until its `link-ok` is imported (unchanged).
+
+**Trade-off.** A relink of an already-linked character that is never pasted on the site leaves the addon signing with a
+secret the site doesn't have, so that character's uploads are refused (`bad_sig`) until the player finishes a link with
+a new code. In v1 the same abandoned relink was harmless, because the secret changed only on import. The addon warns
+when it relinks a linked character. A character that wasn't linked before is no worse off: it isn't linked either way
+(the site answers `not_linked` instead of `/<cmd> export` saying so). Rejected alternatives: keeping the old secret until
+the site confirms needs a message back from the site, which is the hand-off v2 removes; signing with both secrets would
+change the envelope of every signed type.
+
+#### 3.3.4 Site rules for v2 (for the site's follow-up PR)
+
+Issuing:
+1. Generate the code (3.3.2). Store its `lookup` (unique index), the code sealed with the same AES-256-GCM key as the
+   secrets (`sealSecret`), the user, `expiresAt` and `usedAt`. Erase the sealed code once used or expired.
+2. Show `<ADDON_CMD> link <code>` on one line with a copy button that copies exactly that text, with no trailing newline.
+   Keep an option for an 8-character v1 code for older addons (3.3.5).
+
+Pasting:
+1. `decodeString(value, { link: [1, 2] })`. v1 takes today's path unchanged, including the `link-ok` answer.
+2. v2: `sig` matches `^[0-9a-f]{64}$`, `p.lookup` and `p.n` match `^[0-9a-f]{32}$`, and `char`, `class`, `race`, `level`
+   follow the v1 rules; otherwise `decode_failed`.
+3. Find the code by `p.lookup`. It must belong to the signed-in user, be unused and not expired (v1 messages).
+4. Re-derive the secret from the stored code, `char.guid` and `p.n`; compute the HMAC over the canonical envelope without
+   `sig`; compare in constant time. On a mismatch refuse with its own message (for example "That link string doesn't
+   match your code. Run the command from this page again."), keep the code unused, and count the try against `linkpaste`.
+5. Character ownership checks as v1 (a character linked to another account is refused).
+6. In one transaction: mark the code used (`usedAt` null to now, exactly one row), save the character, store
+   `sealSecret(secret)`, audit `character.link`.
+7. Answer `{ linked }` with no `importString`.
+
+The envelope `t` is not checked: the code's 10-minute life and single use already bound replay.
+
+#### 3.3.5 Compatibility
+
+| Case | Result |
+|---|---|
+| Already-linked characters | Keep their secrets on both sides. Nothing is re-derived and nobody relinks. |
+| This addon and today's site (8-character codes) | v1 path, unchanged (`link.v1` golden file unchanged); `link-ok` import unchanged. |
+| This addon and the v2 site | A 26-character code takes v2; a v1 short code still takes v1. |
+| Older addons (0.2.2 and before) and the v2 site | They refuse a 26-character code with their usage line ("8-character code"). The site keeps the whole v1 path (short code, v1 paste, `link-ok` answer) until the owner retires v1. |
+| `link-ok` import after a v2 link | Accepted as today; replaces the secret (3.3.3 rule 3). |
+
+Retiring v1 is a later owner decision: the site stops issuing 8-character codes, then a later addon may drop the
+`link-ok` import, which also closes gap 3 (section 6).
+
+#### 3.3.6 Chat line
+
+A WoW chat line holds 255 characters. `/<cmd> link <code>` is 1 + `len(cmd)` + 6 + 26 characters, 37 with a 4-letter
+command; any slash command up to 222 characters fits. The site copies one line with no newline. The addon strips
+whitespace and `-` from the code, so a grouped display (`01234-56789-…`) or a stray space pasted along also works.
+Slash commands are not sent to any channel. The chat box does keep typed lines in its history (up arrow); that holds the
+code but not `n`, so it cannot give the secret (3.3.8).
+
+#### 3.3.7 Rollout
+
+The addon ships first (this repo). Until the site's follow-up PR implements 3.3.4, the site issues only 8-character codes,
+so a v2 code cannot exist and every link takes v1. The site must accept `link` v2 before it shows 26-character codes.
+
+#### 3.3.8 Threat comparison
+
+| Threat | v1 | v2 | Verdict |
+|---|---|---|---|
+| Guessing a live code on the site | 8 of 28 characters (38 bits); must be the signed-in owner's code; 10 min; single use; 20 pastes/h | 130 bits; same owner binding, life, single use and rate limits | better |
+| Guessing a code offline | nothing derived from the code is published | the link string holds `lookup` and `sig`, both functions of the code, so it is an offline test for a guess; 2^129 HMAC pairs on average is out of reach. This is why the code must have at least 128 bits. | equal |
+| Code stolen before use (screen, stream, shoulder) | useless without the victim's site session: the code is bound to the user who asked for it | same | equal |
+| Code seen after use (chat history, screenshot) | useless | useless for linking (used). The secret also needs `n`, which is only in the link string. | equal |
+| Secret in transit | the `link-ok` string carries the secret in clear; seeing it is enough to forge the character's exports | no string carries the secret; it takes both the code and the link string (`n`) | better |
+| Replay of a link string | code single use; but the v1 string is unsigned, so anyone holding it before use could change its fields | code single use (atomic `usedAt` update); `sig` covers every field | better |
+| Someone else's code typed in game (victim tricked into `/<cmd> link <attacker's code>`) | the victim's string only works in the attacker's session; if the victim hands it over, the attacker links the victim's character and gets the secret from `link-ok` | the attacker links the victim's character and can derive the secret (has the code and the string) | equal |
+| Pasting another person's link string in your own session | refused: the code isn't yours | refused: the code (by `lookup`) isn't yours; the code is not consumed | equal |
+| Forged import (gap 3, `link-ok` unchecked) | any pasted `link-ok` with the right GUID sets a secret the attacker knows | v2 needs no import; the v1 import stays accepted during the transition, so the risk is unchanged until v1 is retired (or A9 lands) | equal now, better later |
+| Stale secret after an abandoned link | an old `link-ok` can be re-imported over a newer secret | newest link wins; an abandoned relink makes uploads fail until the next link (3.3.3 trade-off); nothing blocks the next link | equal (different failure) |
+| Weak in-game randomness | not used | `n` comes from `math.random`; it is defence in depth only, the secret's strength comes from the site's 130-bit code | equal |
+| Site database leak | secrets sealed; live v1 codes in clear for 10 min | secrets sealed; live codes sealed (3.3.4); a leaked code still needs `n` | equal or better |
+| Secret strength | 256 random bits | at least the code's 130 bits | equal in practice (both out of reach) |
+| Local disk (SavedVariables) | secret in clear | secret, `lookup` and `n` in clear | equal |
 
 ---
 
@@ -257,8 +415,8 @@ The uploader remembers handled strings by SHA-256 of the full string (`uploader/
 
 | Situation | Addon | Uploader | Site |
 |---|---|---|---|
-| Unknown type | import: "aren't supported" (`addon/Core.lua:105`) | not extracted (`lib.rs:34`); not counted (`envelope.rs:38-42`) | `unknown_type` (`addon-codec.ts:54`; `ingest/route.ts:27`) |
-| Version other than 1 | import: `v > 1` refused (`addon/Core.lua:97`) | `v2+` silently skipped by extractor regex (`lib.rs:34`) | `unsupported_version` (`addon-codec.ts:55`) |
+| Unknown type | import: "aren't supported" (`addon/Core.lua:148`) | not extracted (`lib.rs:34`); not counted (`envelope.rs:38-42`) | `unknown_type` (`addon-codec.ts:54`; `ingest/route.ts:27`) |
+| Version other than 1 | import: `v > 1` refused (`addon/Core.lua:139`) | `v2+` silently skipped by extractor regex (`lib.rs:34`) | `unsupported_version` (`addon-codec.ts:55`) |
 | Old addon version | - | - | Not refused. `addon` string stored per ingest (`ingest.ts:48-50`); `AddonOutdated` banner if older than latest release (`ingest.ts:55-59`, `site:src/components/AddonOutdated.tsx:6-10`) |
 | Addon update | in-game `VER` warning after 2 newer senders (`addon/Comms.lua:27-36`) | site then GitHub, sha256 checked (`update.rs:80-127,234-244`) | `/api/addon/latest` |
 | App update | - | semver compare, deferred version skipped (`app_update.rs:49-60`) | `/api/uploader/latest` exists, unused |
@@ -279,8 +437,8 @@ The uploader remembers handled strings by SHA-256 of the full string (`uploader/
 
 1. **`export-format.md` does not exist.** Cited at `addon/Codec.lua:1`, `addon/Core.lua:5,26,82`, `addon/Bank.lua:1`, `addon/Recipes.lua:1`, `addon/Comms.lua:1`, `uploader/core/src/envelope.rs:2`, `site:src/lib/addon-codec.ts:5,68`, `site:src/lib/ingest.ts:24`, `site:src/lib/crafting.ts:14`, `site:src/lib/raids.ts:62`, `site:prisma/schema.prisma:322`, `site:docs/workflow/01-decisions.md:12`. Point them at `contract/SPEC.md`.
 2. **No cross-language signature test.** `tests/run.py:1` says it writes for `verify.mjs`, which exists in neither repo. It writes `/tmp/addon-out.json` (`tests/run.py:97`) that nothing reads. Nothing proves the site verifies a Lua HMAC. The site test only round-trips TS (`site:scripts/tests/addon-codec.test.ts:9-17`).
-3. **Import signatures are not verified.** The addon skips the Ed25519 check (`addon/Core.lua:92-93`) and ships no public key. Any pasted `link-ok` with the right GUID replaces the secret (`addon/Core.lua:98-102`).
-4. **`signups` produced, never consumed.** Site builds it (`site:src/app/calendar/[id]/page.tsx:59`); addon refuses it (`addon/Core.lua:105`).
+3. **Import signatures are not verified.** The addon skips the Ed25519 check (`addon/Core.lua:134-135`) and ships no public key. Any pasted `link-ok` with the right GUID replaces the secret (`addon/Core.lua:140-144`).
+4. **`signups` produced, never consumed.** Site builds it (`site:src/app/calendar/[id]/page.tsx:59`); addon refuses it (`addon/Core.lua:148`).
 5. **`signup`, `attendance`, `kills` accepted, never produced.** No producer in `addon/`. Their payloads are defined only by site readers (`site:src/app/calendar/actions.ts:38`, `site:src/lib/raids.ts:67,105`). UI labels also list `loot`, which no part produces or accepts (`uploader/app/ui/upload-lines.js:13`).
 6. **Version 1 hard-coded in five places.** `addon/Core.lua:36`, `site:src/lib/ingest.ts:29,50`, `site:src/app/calendar/actions.ts:178`, `uploader/core/src/lib.rs:34`. A `v2` string is silently ignored by the uploader, with no message.
 7. **Duplicated constants.** ALPHA, MAX_STRING, MAX_DECODED in `site:src/lib/addon-codec.ts:6-9` and `uploader/core/src/envelope.rs:8-10`. Type list in `uploader/core/src/lib.rs:29`, the regex at `lib.rs:34`, and `site:src/app/api/uploader/ingest/route.ts:13`. The Lua decoder has no size limits (`addon/Codec.lua:178-187`).
@@ -291,7 +449,7 @@ The uploader remembers handled strings by SHA-256 of the full string (`uploader/
 12. **Canonical JSON edge cases.** DEL (0x7F) is escaped by Lua (`addon/Codec.lua:14`) but not by `JSON.stringify` (`site:src/lib/addon-codec.ts:72`), so a tab name containing it fails with `bad_sig`. Invalid UTF-8 and `-0` also break. The Lua decoder has no surrogate pairs (`addon/Codec.lua:63-67`).
 13. **`link` identity field mismatch.** The addon sends `char.realm` (`addon/Core.lua:20-23`); the site wants `char.surname` and falls back to `realm` (`site:src/app/settings/link/actions.ts:56`). A bad class gives the "too old or too new" message (`:61`).
 14. **Fields sent but unused or unvalidated.** `recipes.skill` is ignored (`site:src/lib/crafting.ts:15-20`). Bad recipe ids are dropped, not refused (`:18`). `char.name`/`realm` in signed exports are never read. `envelope.addon` is optional in the TS type (`site:src/lib/ingest.ts:7`).
-15. **Addon text points to a missing paste box.** `/cmd export` says paste on the "Bank or Crafting page" (`addon/Core.lua:119`). No recipes paste form exists; the crafting page says nothing needs pasting (`site:src/app/crafting/page.tsx:156`).
+15. **Addon text points to a missing paste box.** `/cmd export` says paste on the "Bank or Crafting page" (`addon/Core.lua:170`). No recipes paste form exists; the crafting page says nothing needs pasting (`site:src/app/crafting/page.tsx:156`).
 16. **Stale uploader comment.** `uploader/core/src/browser_auth.rs:7-11` says the site routes 404 and are "not deployed". They exist (`site:src/app/api/uploader/oauth/*/route.ts`).
 17. **429 not handled on sign-in.** Preflight 429 becomes `NotDeployed` (`browser_auth.rs:236-239`); token 429 becomes `BadResponse` (`:442`). Ranks 413 becomes a retry (`ranks.rs:420`) and will repeat each pass.
 18. **Ingest size check trusts the header.** `Content-Length` is checked but `req.json()` reads the full body (`site:src/app/api/uploader/ingest/route.ts:18-20`). `/logs` reads with a cap (`site:src/lib/uploader-log-rules.ts:53-68`).
@@ -307,6 +465,7 @@ Generated in task A2: see `contract/golden/README.md` for how, and `contract/gol
 Export strings (`contract/golden/strings/`), each a `.txt` (the string) plus `.json` (decoded envelope):
 
 - `link.v1.txt`, `link.v1.json`
+- `link.v2.txt`, `link.v2.json`, `link-kdf.v2.json` (key-derivation vectors, section 3.3.2), `bad/link-v2-bad-sig.txt`
 - `link-ok.v1.txt`, `link-ok.v1.json` (signed with a test Ed25519 key; `link-ok.v1.pub.hex`)
 - `gbank.v1.txt`, `gbank.v1.json`
 - `gbank.v1.no-guild.txt`, `gbank.v1.no-guild.json`

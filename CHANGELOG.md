@@ -3,6 +3,17 @@
 The release version comes from the `addon-v<version>` tag (see `.github/workflows/addon-release.yml`); nothing in the
 source carries it. Pushing the tag publishes the release.
 
+## Unreleased
+- Linking takes two steps instead of three (link v2, `contract/SPEC.md` §3.3). With the long 26-character code the site
+  will show, `<cmd> link <code>` derives the character's signing secret from the code (HKDF-SHA256, bound to the
+  character) and shows a `!BF:link:v2:` string signed with it. Pasting that on the site finishes the link; there is no
+  string to import back. The string carries a lookup id for the code, never the code or the secret. The code may be
+  typed in lower case or grouped with spaces or hyphens.
+- The 8-character code and the `<cmd> import` step keep working unchanged, and characters already linked keep their
+  secret. The site accepts link v2 in a later update; until then it gives 8-character codes only.
+- Linking again with a new code replaces the character's secret at once. If that string is never pasted on the site,
+  the character's uploads are refused until it is linked again; the addon says so when it relinks a linked character.
+
 ## 0.2.2 (unreleased)
 - Recipes save from the profession window on the WoW Forever client (interface 16001). That client has no
   `GetTradeSkill*` / `GetCraft*` globals, so opening a profession window raised an error and saved nothing. The

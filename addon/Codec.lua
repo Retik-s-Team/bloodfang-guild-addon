@@ -161,6 +161,12 @@ function ns.hmac(key, msg)
   for i = 1, 64 do local k = byte(key, i) ip[i] = char(u(bxor(k, 0x36))) op[i] = char(u(bxor(k, 0x5c))) end
   return ns.sha256(concat(op) .. ns.sha256(concat(ip) .. msg))
 end
+-- HKDF-SHA256 (RFC 5869): extract with `salt`, then expand `info` to `len` bytes. Link v2 (contract/SPEC.md 3.3.2).
+function ns.hkdf(salt, ikm, info, len)
+  local prk, t, out = ns.hmac(salt, ikm), "", {}
+  for i = 1, math.ceil(len / 32) do t = ns.hmac(prk, t .. info .. char(i)) out[i] = t end
+  return concat(out):sub(1, len)
+end
 
 -- ---------- Envelope ----------
 local function deflate() return ns.LibDeflate or (LibStub and LibStub("LibDeflate", true)) end
