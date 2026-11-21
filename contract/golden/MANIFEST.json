@@ -4,7 +4,8 @@
       1
     ],
     "link": [
-      1
+      1,
+      2
     ],
     "ranks": [
       1
@@ -63,6 +64,7 @@
     "strings/bad/bad-sig.txt": "29b636c9c4f9271009e62c94ea9f1ab1c7add88a5319a7b390bca2537a762099",
     "strings/bad/decode-failed.txt": "0009bb16c63fbdb850ac25e2b477d9c8c3f50fa91942cb1f96b2674ad22436f4",
     "strings/bad/expected.json": "3329854d4ff65aaf3735249b18f0a3bc051bbdd567b393edca698e3a597a779f",
+    "strings/bad/link-v2-bad-sig.txt": "57dbb10d36c2c18dd294010f5b11bb2b2ff30ddd59de73d5532225e549bee553",
     "strings/bad/unknown-type.txt": "20d3a73fb7de259389831966e789f37767ce9e71963cb47ec1828cf016f23693",
     "strings/bad/unsupported-version.txt": "4297b8233220e1efa9736261ed07a1eda42430662c70c526495da5a686eeea9a",
     "strings/canonical.v1.json": "f703424e2144dfffb4ce0f920201e2c74d836f476d69de76b5a33fedf5b1e35e",
@@ -70,8 +72,11 @@
     "strings/gbank.no-guild.v1.txt": "ab914225a45c1c03a6ede3cb0015ab8ba234be597383c76e170b1abb89c38d5e",
     "strings/gbank.v1.json": "29d97138bddb9cefd2831ed1b755daf638fed0dff831eb7b22534b91d4e5a5a7",
     "strings/gbank.v1.txt": "4384deb7d6304b6d40d91a93794623933935b698d5136139bea2164ee7549cce",
+    "strings/link-kdf.v2.json": "2772e75b92ed13b447b5905a236eb20a27f59a07766d0385bf3c6dd5d1294dd4",
     "strings/link.v1.json": "d548fa693f0d1e41000b13a4590d4875f76b382271a526a6b37f52d9f8144c74",
     "strings/link.v1.txt": "5239edb67f0aa5a941a630debe36f9b8f034261a33a8f2f30be00d214b3fedb1",
+    "strings/link.v2.json": "ce317cd130a1bd4f4500a7c20d1cca39ef679bf953dccf401a1722266cc74954",
+    "strings/link.v2.txt": "fcaec944e0782dc4d9629fb90b3dce4ef9723db473addd10c64c961abd49d73c",
     "strings/ranks.v1.json": "7d1a34804229a732ae349bd30d1c8cde76a0b03de92ae6835149f0d0592856cc",
     "strings/ranks.v1.txt": "0ca627147fabaa9be2dc7e1bfa20b6ec87dcbb89fe40bc723199a12e72f87825",
     "strings/recipes.v1.json": "eb78359fe4220f4d1277be21b0418adff8749a3af0e5b0c002877723849f78e1",

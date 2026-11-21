@@ -14,4 +14,7 @@ request or response is a new case. The previous version stays until the site has
 labelled `golden-break` remove it. `tests/golden-add-only.sh` enforces this in CI. `MANIFEST.json` is regenerated
 whenever files are added: run the cargo command first, then `run.py --write-golden`.
 
+Link v2 (`../SPEC.md` 3.3): `strings/link-kdf.v2.json` holds the key-derivation vectors (code, salt, PRK, lookup, secret,
+signed text, signature, normalization cases) for the string in `strings/link.v2.txt`; `run.py` recomputes them in Python.
+
 Test data only: the secret `"11" * 32`, `Player-4395-0ABCDEF1`, "Testchar", "Example Guild", fixed times.

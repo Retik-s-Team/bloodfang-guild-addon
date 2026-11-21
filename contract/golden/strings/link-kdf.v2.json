@@ -1,0 +1,72 @@
+{
+  "spec": "contract/SPEC.md 3.3.2",
+  "kdf": "HKDF-SHA256 (RFC 5869)",
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "codeLength": 26,
+  "salt": "BF-LINK-V2",
+  "lookupInfo": "lookup",
+  "lookupLength": 16,
+  "secretInfo": "secret:Player-4395-0ABCDEF1:45803b075f4e30be2d92dd8a4d17eb66",
+  "secretLength": 32,
+  "code": "0123456789ABCDEFGHJKMNPQRS",
+  "guid": "Player-4395-0ABCDEF1",
+  "n": "45803b075f4e30be2d92dd8a4d17eb66",
+  "prk": "0a6e164638ad9f4162ce72ca947886904069d80c9acdcac88b6c0ac711b95c86",
+  "lookup": "112b513354061ddc7c5ff47fba87e083",
+  "secret": "b27946b3ee3a51d0b32a8444fa6ae8468d18cd3003e73498ea6fe46dcab720a1",
+  "string": "link.v2.txt",
+  "signedText": "{\"addon\":\"0.1.0\",\"char\":{\"guid\":\"Player-4395-0ABCDEF1\",\"name\":\"Testchar\",\"realm\":\"Testrealm\"},\"id\":\"3556068e1cb2bc6b39bcfa41cdc2f1bc\",\"p\":{\"class\":\"MAGE\",\"level\":60,\"lookup\":\"112b513354061ddc7c5ff47fba87e083\",\"n\":\"45803b075f4e30be2d92dd8a4d17eb66\",\"race\":\"Gnome\"},\"t\":1793836800}",
+  "sig": "09db34704ea405927d3145648ab68c44fa237ff9bee5b92fb839bf3364e3dac2",
+  "normalization": [
+    {
+      "input": "0123456789ABCDEFGHJKMNPQRS",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": "0123456789abcdefghjkmnpqrs",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": "01234-56789-ABCDE-FGHJK-MNPQR-S",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": " 01234 56789 ABCDE FGHJK MNPQR S ",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": "oI23456789ABCDEFGHJKMNPQRS",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": "OL23456789abcdefghjkmnpqrs",
+      "code": "0123456789ABCDEFGHJKMNPQRS"
+    },
+    {
+      "input": "0123456789ABCDEFGHJKMNPQR",
+      "code": null
+    },
+    {
+      "input": "0123456789ABCDEFGHJKMNPQRST",
+      "code": null
+    },
+    {
+      "input": "U123456789ABCDEFGHJKMNPQRS",
+      "code": null
+    },
+    {
+      "input": "0123456789ABCDEFGHJKMNPQR!",
+      "code": null
+    },
+    {
+      "input": "0123456789ABCDEFGHJKMNPQRé",
+      "code": null
+    }
+  ],
+  "bad": {
+    "bad/link-v2-bad-sig.txt": {
+      "change": "p.level set to 1 after signing",
+      "error": "bad_sig"
+    }
+  }
+}

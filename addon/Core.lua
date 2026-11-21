@@ -79,14 +79,56 @@ function ns.showPaste(title, onDone)
   f:Show()
 end
 
--- ---------- link and import (contract/SPEC.md) ----------
-local function link(code)
-  code = (code or ""):upper():gsub("%s", "")
-  if not code:match("^[A-Z0-9]+$") or #code ~= 8 then ns.print("Usage: " .. ns.cmd .. " link <8-character code from the site's Link page>") return end
+-- ---------- link and import (contract/SPEC.md 3.3) ----------
+local function linkFields()
   local _, classFile = UnitClass("player")
   local _, race = UnitRace("player")
-  local env = { id = ns.randomHex(16), t = GetServerTime(), addon = ns.version, char = ns.me(), p = { code = code, class = classFile, race = race, level = UnitLevel("player") } }
+  return { id = ns.randomHex(16), t = GetServerTime(), addon = ns.version, char = ns.me(), p = { class = classFile, race = race, level = UnitLevel("player") } }
+end
+
+-- v1: an 8-character code goes to the site in the string; the secret comes back in a link-ok import.
+local function linkV1(code)
+  local env = linkFields()
+  env.p.code = code
   ns.showCopy("Copy this link string and paste it on the site's Link page", ns.encodeString("link", 1, env, nil))
+end
+
+-- v2 code normalization (SPEC 3.3.2): the 26-character code, or nil.
+function ns.linkCode(s)
+  s = (s or ""):gsub("[%s%-]", "")
+  if s:find("[^0-9A-Za-z]") then return nil end
+  s = s:upper():gsub("O", "0"):gsub("[IL]", "1")
+  if #s == 26 and not s:find("[^0-9A-HJKMNP-TV-Z]") then return s end
+end
+
+-- v2 (SPEC 3.3): the secret is derived from the code, kept at once (the newest link wins, 3.3.3), and the string the
+-- site needs is signed with it. Nothing comes back from the site.
+local SALT = "BF-LINK-V2"
+local function linkV2(code)
+  local guid = UnitGUID("player")
+  local chars = db().chars
+  local old = chars[guid]
+  local lookup = ns.toHex(ns.hkdf(SALT, code, "lookup", 16))
+  local n = (old and old.lookup == lookup and old.n) or ns.randomHex(16) -- same code again: same secret
+  local secret = ns.toHex(ns.hkdf(SALT, code, "secret:" .. guid .. ":" .. n, 32))
+  chars[guid] = { secret = secret, linkedAt = GetServerTime(), lookup = lookup, n = n }
+  local env = linkFields()
+  env.p.lookup, env.p.n = lookup, n
+  ns.showCopy("Copy this string and paste it on the site's Link page. Nothing comes back to paste here.", ns.encodeString("link", 2, env, secret))
+  if old and old.secret and old.lookup ~= lookup then
+    ns.print("This character was already linked. Paste the string on the site to finish, or its uploads are refused until you link it again.")
+  else
+    ns.print("Paste the string on the site's Link page to finish linking this character.")
+  end
+  for _, fn in ipairs(ns.afterLink) do fn() end
+end
+
+local function link(arg)
+  local raw = (arg or ""):gsub("[%s%-]", ""):upper()
+  if #raw == 8 and raw:match("^[A-Z0-9]+$") then return linkV1(raw) end
+  local code = ns.linkCode(arg)
+  if not code then ns.print("Usage: " .. ns.cmd .. " link <code from the site's Link page>") return end
+  linkV2(code)
 end
 
 -- Site -> addon imports. Owner decision, 2026-11-04: the Ed25519 signature is not checked yet (OPEN-QUESTIONS);

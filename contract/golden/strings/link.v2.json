@@ -1,0 +1,18 @@
+{
+  "addon": "0.1.0",
+  "char": {
+    "guid": "Player-4395-0ABCDEF1",
+    "name": "Testchar",
+    "realm": "Testrealm"
+  },
+  "id": "3556068e1cb2bc6b39bcfa41cdc2f1bc",
+  "p": {
+    "class": "MAGE",
+    "level": 60,
+    "lookup": "112b513354061ddc7c5ff47fba87e083",
+    "n": "45803b075f4e30be2d92dd8a4d17eb66",
+    "race": "Gnome"
+  },
+  "sig": "09db34704ea405927d3145648ab68c44fa237ff9bee5b92fb839bf3364e3dac2",
+  "t": 1793836800
+}
