@@ -4,11 +4,57 @@ The Lua 5.1 run (the game's runtime) writes the .txt strings. The LuaJIT run mus
 Every string is also decoded and its HMAC checked here, in Python, independently of the Lua code, from the
 rules in contract/SPEC.md section 2. Files under contract/golden are add-only: see contract/golden/README.md.
 """
-import hashlib, hmac, json, os, zlib
+import hashlib, hmac, json, os, re, zlib
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "contract", "golden")
 ALPHA = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789()"
-TYPES = {"link": 1, "gbank": 1, "recipes": 1, "ranks": 1}
+TYPES = {"link": [1, 2], "gbank": [1], "recipes": [1], "ranks": [1]}
+# Golden export strings: (file name base, version). The file is strings/<base>.v<version>.txt.
+STRINGS = [("link", 1), ("gbank", 1), ("gbank.no-guild", 1), ("recipes", 1), ("ranks", 1), ("link", 2)]
+
+# ---------- link v2 (contract/SPEC.md 3.3.2), written from the SPEC, independently of the Lua code ----------
+LINK_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+LINK_SALT = b"BF-LINK-V2"
+LINK_TEST_CODE = "0123456789ABCDEFGHJKMNPQRS"
+# Inputs typed after `<cmd> link`, and the code each normalizes to (None: refused with the usage line).
+LINK_INPUTS = [
+    "0123456789ABCDEFGHJKMNPQRS", "0123456789abcdefghjkmnpqrs", "01234-56789-ABCDE-FGHJK-MNPQR-S",
+    " 01234 56789 ABCDE FGHJK MNPQR S ", "oI23456789ABCDEFGHJKMNPQRS", "OL23456789abcdefghjkmnpqrs",
+    "0123456789ABCDEFGHJKMNPQR", "0123456789ABCDEFGHJKMNPQRST", "U123456789ABCDEFGHJKMNPQRS",
+    "0123456789ABCDEFGHJKMNPQR!", "0123456789ABCDEFGHJKMNPQR\u00e9",
+]
+
+
+def link_code(s):
+    """SPEC 3.3.2 normalization: the v2 code, or None."""
+    s = re.sub(r"[\t\n\v\f\r -]", "", s)
+    if not re.fullmatch(r"[0-9A-Za-z]*", s, re.ASCII):
+        return None
+    s = s.upper().replace("O", "0").replace("I", "1").replace("L", "1")
+    return s if len(s) == 26 and all(c in LINK_ALPHABET for c in s) else None
+
+
+def hkdf(salt, ikm, info, length):
+    """RFC 5869 HKDF-SHA256. Returns (PRK, OKM)."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+    t, okm, i = b"", b"", 1
+    while len(okm) < length:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        okm, i = okm + t, i + 1
+    return prk, okm[:length]
+
+
+def link_keys(code, guid, n):
+    """SPEC 3.3.2: (PRK hex, lookup hex, secret hex) for a normalized code, a character GUID and the nonce `n`."""
+    prk, lookup = hkdf(LINK_SALT, code.encode(), b"lookup", 16)
+    _, secret = hkdf(LINK_SALT, code.encode(), f"secret:{guid}:{n}".encode(), 32)
+    return prk.hex(), lookup.hex(), secret.hex()
+
+
+def sig_ok(env, secret_hex):
+    body = {k: x for k, x in env.items() if k != "sig"}
+    want = hmac.new(bytes.fromhex(secret_hex), canonical(body).encode(), hashlib.sha256).hexdigest()
+    return env.get("sig") == want
 UPLOADER_PROTOCOL = 1
 
 GEN = r'''function(ns)
@@ -42,6 +88,22 @@ GEN = r'''function(ns)
   out["bad/bad-sig"] = ns.encodeString("recipes", 1, j, nil)
   out["canonical"] = ns.jsonEncode({ z = 1, n = -42, big = 9007199254740991, yes = true, no = false,
     s = { "Épées", "tab\tnew\nline", "quote\"back\\slash", "ctl\1" } })
+  -- link v2 (SPEC 3.3): the string for the fixed test code, the secret the addon kept, and a tampered copy.
+  E2E_SEED(20261121)
+  local before = GuildaddonDB.chars[E2E_GUID]
+  ns.showCopy = function(_, text) copied = text end
+  copied = nil
+  SlashCmdList[key]("link " .. E2E_LINK_CODE)
+  out["link.v2"] = copied
+  out["link.v2.secret"] = GuildaddonDB.chars[E2E_GUID] and GuildaddonDB.chars[E2E_GUID].secret
+  for i, s in ipairs(E2E_LINK_INPUTS) do out["norm." .. i] = ns.linkCode(s) or "" end
+  if copied then
+    local _, _, k = ns.decodeString(copied)
+    k.p.level = 1
+    out["bad/link-v2-bad-sig"] = ns.encodeString("link", 2, k, nil)
+  end
+  ns.showCopy = showCopy
+  GuildaddonDB.chars[E2E_GUID] = before
   return out
 end'''
 
@@ -50,6 +112,9 @@ CANONICAL_INPUT = {"z": 1, "n": -42, "big": 9007199254740991, "yes": True, "no":
 
 
 def make(lua, ns):
+    g = lua.globals()
+    g.E2E_LINK_CODE = LINK_TEST_CODE
+    g.E2E_LINK_INPUTS = lua.table_from(LINK_INPUTS)
     t = lua.eval(GEN)(ns)
     return {k: t[k] for k in list(t)}
 
@@ -87,28 +152,34 @@ def build(made, secret):
     """Return {relative path: file text} for everything under contract/golden/strings."""
     a, b = made["lua51"], made["luajit"]
     files, errors = {}, []
-    for name in ("link", "gbank", "gbank.no-guild", "recipes", "ranks"):
-        ty = name.split(".")[0]
+    for base, want_v in STRINGS:
+        name = base if (base, want_v) != ("link", 2) else "link.v2"
+        ty = base.split(".")[0]
+        if not a.get(name) or not b.get(name):
+            errors.append(f"{name}: the addon made no string")
+            continue
         ty_, v, text, env = decode(a[name])
         _, _, _, env_jit = decode(b[name])
         if env != env_jit:
             errors.append(f"{name}: Lua 5.1 and LuaJIT decode to different JSON")
-        if ty_ != ty or v != TYPES[ty]:
+        if ty_ != ty or v != want_v:
             errors.append(f"{name}: header says {ty_} v{v}")
         if text != canonical(env):
             errors.append(f"{name}: body is not canonical JSON")
-        if ty != "link":
-            body = {k: x for k, x in env.items() if k != "sig"}
-            want = hmac.new(bytes.fromhex(secret), canonical(body).encode(), hashlib.sha256).hexdigest()
-            if env.get("sig") != want:
-                errors.append(f"{name}: HMAC does not verify in Python")
-        files[f"strings/{name}.v{v}.txt"] = a[name] + "\n"
-        files[f"strings/{name}.v{v}.json"] = json.dumps(env, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        if (ty, v) == ("link", 2):
+            errors += check_link_v2(a, b, env)
+        elif ty != "link" and not sig_ok(env, secret):
+            errors.append(f"{name}: HMAC does not verify in Python")
+        files[f"strings/{base}.v{v}.txt"] = a[name] + "\n"
+        files[f"strings/{base}.v{v}.json"] = json.dumps(env, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if a["canonical"] != canonical(CANONICAL_INPUT):
         errors.append("canonical: Lua and Python canonical JSON differ")
     files["strings/canonical.v1.json"] = json.dumps({"input": CANONICAL_INPUT, "canonical": a["canonical"]},
                                                     indent=2, ensure_ascii=False) + "\n"
     files["strings/secret.v1.hex"] = secret + "\n"
+    if a.get("link.v2") and a.get("bad/link-v2-bad-sig"):
+        files["strings/link-kdf.v2.json"] = link_kdf_file(a)
+        files["strings/bad/link-v2-bad-sig.txt"] = a["bad/link-v2-bad-sig"] + "\n"
     gb = a["gbank"]
     bad = {
         "bad-prefix": ("hello", "bad_prefix"),
@@ -127,6 +198,64 @@ def build(made, secret):
     return files, errors
 
 
+def check_link_v2(a, b, env):
+    """The link v2 string against SPEC 3.3.2, recomputed here in Python."""
+    errors = []
+    p = env.get("p", {})
+    if set(p) != {"lookup", "n", "class", "race", "level"}:
+        errors.append(f"link.v2: payload fields are {sorted(p)}")
+    if not re.fullmatch(r"[0-9a-f]{32}", str(p.get("n", ""))):
+        errors.append("link.v2: n is not 32 lower hex")
+    _, lookup, secret = link_keys(LINK_TEST_CODE, env["char"]["guid"], p.get("n", ""))
+    if p.get("lookup") != lookup:
+        errors.append("link.v2: lookup differs from the SPEC derivation")
+    for label, made in (("Lua 5.1", a), ("LuaJIT", b)):
+        if made.get("link.v2.secret") != secret:
+            errors.append(f"link.v2: the secret {label} kept differs from the SPEC derivation")
+    if not sig_ok(env, secret):
+        errors.append("link.v2: sig does not verify with the derived secret")
+    if LINK_TEST_CODE in a["link.v2"] or LINK_TEST_CODE in json.dumps(env) or secret in json.dumps(env):
+        errors.append("link.v2: the string carries the code or the secret")
+    for i, s in enumerate(LINK_INPUTS, 1):
+        for label, made in (("Lua 5.1", a), ("LuaJIT", b)):
+            if (made.get(f"norm.{i}") or None) != link_code(s):
+                errors.append(f"link.v2: {label} normalizes {s!r} to {made.get(f'norm.{i}')!r}, SPEC says {link_code(s)!r}")
+    _, _, _, bad = decode(a["bad/link-v2-bad-sig"])
+    if sig_ok(bad, secret):
+        errors.append("link.v2: the tampered string still verifies")
+    return errors
+
+
+def link_kdf_file(a):
+    """strings/link-kdf.v2.json: the vectors the site tests its derivation against (SPEC 3.3.2)."""
+    _, _, _, env = decode(a["link.v2"])
+    guid, n = env["char"]["guid"], env["p"]["n"]
+    prk, lookup, secret = link_keys(LINK_TEST_CODE, guid, n)
+    body = {k: x for k, x in env.items() if k != "sig"}
+    return json.dumps({
+        "spec": "contract/SPEC.md 3.3.2",
+        "kdf": "HKDF-SHA256 (RFC 5869)",
+        "alphabet": LINK_ALPHABET,
+        "codeLength": 26,
+        "salt": LINK_SALT.decode(),
+        "lookupInfo": "lookup",
+        "lookupLength": 16,
+        "secretInfo": f"secret:{guid}:{n}",
+        "secretLength": 32,
+        "code": LINK_TEST_CODE,
+        "guid": guid,
+        "n": n,
+        "prk": prk,
+        "lookup": lookup,
+        "secret": secret,
+        "string": "link.v2.txt",
+        "signedText": canonical(body),
+        "sig": env["sig"],
+        "normalization": [{"input": s, "code": link_code(s)} for s in LINK_INPUTS],
+        "bad": {"bad/link-v2-bad-sig.txt": {"change": "p.level set to 1 after signing", "error": "bad_sig"}},
+    }, indent=2, ensure_ascii=False) + "\n"
+
+
 def manifest(files):
     """MANIFEST.json over every file under contract/golden (strings from here, http from cargo)."""
     entries = {}
@@ -139,7 +268,7 @@ def manifest(files):
     for rel, text in files.items():
         entries[rel] = text.encode()
     return json.dumps({
-        "exportVersions": {k: [v] for k, v in sorted(TYPES.items())},
+        "exportVersions": {k: v for k, v in sorted(TYPES.items())},
         "uploaderProtocol": UPLOADER_PROTOCOL,
         "generators": {"strings/": "python tests/run.py --write-golden",
                        "http/*.request.json": "WRITE_GOLDEN=1 cargo test -p guild-uploader-core golden",

@@ -4,6 +4,8 @@
 import sys, json, lupa.lua51 as L51, lupa.luajit21 as LJ
 root = __import__("os").path.dirname(__file__) + "/../addon/"
 import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import golden
 SECRET = os.environ.get("E2E_SECRET", "11" * 32)
 GUID = os.environ.get("E2E_GUID", "Player-4395-0ABCDEF1")
 STUBS = r'''
@@ -273,6 +275,73 @@ for label, mk, shim in [("luajit", LJ.LuaRuntime, False), ("lua51", L51.LuaRunti
     for got, exp in zip(bank, want):
         assert got == exp, (label, "gbank", got, exp)
     assert len(bank) == len(want), (label, bank)
+    # Link v2 (contract/SPEC.md 3.3). Python recomputes every derived value from the SPEC (tests/golden.py).
+    # HKDF-SHA256 itself: RFC 5869 test case 1.
+    hk = lua.eval("""function(ns) return ns.toHex(ns.hkdf(ns.fromHex('000102030405060708090a0b0c'), string.rep(string.char(11), 22),
+      ns.fromHex('f0f1f2f3f4f5f6f7f8f9'), 42)) end""")(ns)
+    assert hk == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865", (label, "hkdf", hk)
+    run_link = lua.eval(r"""function(ns, arg)
+      local copied, hooks = nil, 0
+      local showCopy, after = ns.showCopy, ns.afterLink
+      ns.showCopy = function(_, text) copied = text end
+      ns.afterLink = { function() hooks = hooks + 1 end }
+      for k in pairs(printed) do printed[k] = nil end
+      SlashCmdList[next(SlashCmdList)]("link " .. arg)
+      ns.showCopy, ns.afterLink = showCopy, after
+      local c = GuildaddonDB.chars[E2E_GUID]
+      return copied, c and c.secret, hooks, printed[#printed] or ""
+    end""")
+    def link(arg):
+        s, secret, hooks, msg = run_link(ns, arg)
+        env = golden.decode(s)[3] if s else None
+        return s, env, secret, hooks, msg
+    code = golden.LINK_TEST_CODE
+    # R1: a 26-character code derives the secret (SPEC 3.3.2), keeps it for this character and shows a link v2 string
+    # with a lookup id and a nonce, signed with that secret; the code and the secret are not in the string.
+    s, env, secret, hooks, msg = link(code)
+    assert s and s.startswith("!BF:link:v2:"), (label, "link R1", s, msg)
+    p2 = env["p"]
+    assert set(p2) == {"lookup", "n", "class", "race", "level"}, (label, "link R1 fields", sorted(p2))
+    _, lookup, want = golden.link_keys(code, GUID, p2["n"])
+    assert (p2["lookup"], secret) == (lookup, want), (label, "link R1 derivation")
+    assert golden.sig_ok(env, secret), (label, "link R1 sig")
+    assert code not in s and code not in json.dumps(env) and secret not in json.dumps(env), (label, "link R1 leak")
+    assert hooks == 1, (label, "link R1 after-link hooks", hooks)
+    # R2: the code may be typed in lower case, grouped with spaces or hyphens, or with O, I and L for 0 and 1;
+    # anything else (wrong length, U, other characters) prints the usage line and changes nothing.
+    for typed in golden.LINK_INPUTS:
+        s2, env2, secret2, _, msg2 = link(typed)
+        if golden.link_code(typed):
+            assert env2 and env2["p"]["lookup"] == lookup and secret2 == secret, (label, "link R2", typed)
+        else:
+            assert s2 is None and secret2 == secret and "Usage" in msg2, (label, "link R2 refused", typed, msg2)
+    # R3: the same code again keeps the nonce and the secret; a new code replaces them (the newest link wins); a v1
+    # link-ok import still replaces the secret, and the next v2 link after it picks a new nonce.
+    _, env3, secret3, _, _ = link(code)
+    assert (env3["p"]["n"], secret3) == (p2["n"], secret), (label, "link R3 same code")
+    other = "ZYXWVTSRQPNMKJHGFEDCBA9876"
+    _, env4, secret4, _, msg4 = link(other)
+    _, lookup4, want4 = golden.link_keys(other, GUID, env4["p"]["n"])
+    assert (env4["p"]["lookup"], secret4) == (lookup4, want4) and secret4 != secret, (label, "link R3 new code")
+    assert "already linked" in msg4, (label, "link R3 relink warning", msg4)
+    lua.eval("""function(ns) ns.commands.import(ns.encodeString("link-ok", 1, { char = { guid = E2E_GUID }, p = { secret = string.rep("22", 32) } }, nil)) end""")(ns)
+    assert lua.eval("function() return GuildaddonDB.chars[E2E_GUID].secret end")() == "22" * 32, (label, "link R3 link-ok")
+    _, env5, secret5, _, _ = link(code)
+    assert env5["p"]["n"] != p2["n"] and golden.link_keys(code, GUID, env5["p"]["n"])[2] == secret5, (label, "link R3 after import")
+    # R4: an 8-character code still makes a link v1 string and leaves the stored secret alone (v1 unchanged).
+    lua.execute("GuildaddonDB.chars[E2E_GUID] = { secret = '%s' }" % SECRET)
+    s6, env6, secret6, hooks6, _ = link("ABCD2345")
+    assert s6.startswith("!BF:link:v1:") and env6["p"]["code"] == "ABCD2345" and "sig" not in env6, (label, "link R4", s6)
+    assert secret6 == SECRET and hooks6 == 0, (label, "link R4 secret kept")
+    # R5: after a v2 link, exports are signed with the derived secret.
+    _, env7, secret7, _, _ = link(code)
+    rc7 = ns.export("recipes", lua.eval("function() return { profession = 'Alchemy', skill = 1, recipes = { 3170 } } end")())
+    assert golden.sig_ok(golden.decode(rc7)[3], secret7) and secret7 != SECRET, (label, "link R5")
+    # R6: the command the site shows fits in one chat line (255 characters), grouped or not.
+    for typed in (code, "01234-56789-ABCDE-FGHJK-MNPQR-S"):
+        line = lua.eval("function(ns) return ns.cmd end")(ns) + " link " + typed
+        assert len(line) <= 255, (label, "link R6", len(line))
+    lua.execute("GuildaddonDB.chars[E2E_GUID] = { secret = '%s' }" % SECRET)
     out[label] = {"sha": h[0], "hmac": h[1], "gbank": gb, "recipes": rc, "ranks": rk, "roundtrip": list(rt)}
     print(label, h[0][:16], h[1][:16], len(gb), list(rt))
 for k, r in out.items():
@@ -283,8 +352,6 @@ for k, r in out.items():
 print("all addon tests passed")
 
 # ---------- golden fixtures (contract/golden/strings) ----------
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import golden
 made = {}
 for label, mk, shim in [("lua51", L51.LuaRuntime, True), ("luajit", LJ.LuaRuntime, False)]:
     lua = mk()
