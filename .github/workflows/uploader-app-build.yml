@@ -175,3 +175,4 @@ jobs:
           name: app-${{ matrix.platform }}
           path: dist/
           if-no-files-found: error
+          retention-days: 3 # ~20 MB per macOS build; releases carry the shipped files
